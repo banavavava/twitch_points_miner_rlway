@@ -104,9 +104,9 @@ twitch_miner.mine(
                 community_goals=True,
                 bet=BetSettings(
                     strategy=Strategy.SMART,
-                    percentage=5,
+                    percentage=24,
                     percentage_gap=30,
-                    max_points=30000,
+                    max_points=55000,
                     stealth_mode=True,
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
@@ -128,9 +128,9 @@ twitch_miner.mine(
                 community_goals=True,
                 bet=BetSettings(
                     strategy=Strategy.SMART,
-                    percentage=5,
+                    percentage=24,
                     percentage_gap=30,
-                    max_points=30000,
+                    max_points=55000,
                     stealth_mode=True,
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
