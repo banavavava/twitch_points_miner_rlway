@@ -130,7 +130,7 @@ twitch_miner.mine(
                     strategy=Strategy.SMART,
                     percentage=24,
                     percentage_gap=30,
-                    max_points=55000,
+                    max_points=100000,
                     stealth_mode=True,
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
