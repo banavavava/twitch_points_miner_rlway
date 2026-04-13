@@ -2,6 +2,7 @@ import logging
 import os
 
 from colorama import Fore
+from dotenv import load_dotenv
 
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
 from TwitchChannelPointsMiner.classes.AIBetAnalyzer import (
@@ -26,6 +27,8 @@ from TwitchChannelPointsMiner.classes.entities.Bet import (
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
 from TwitchChannelPointsMiner.logger import ColorPalette, LoggerSettings
 
+load_dotenv()
+
 
 def build_ai_analyzer():
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -49,8 +52,8 @@ AI_ANALYZER = build_ai_analyzer()
 
 
 twitch_miner = TwitchChannelPointsMiner(
-    username=os.getenv("TWITCH_USERNAME", "your-twitch-username"),
-    password=os.getenv("TWITCH_PASSWORD"),
+    username=os.getenv("TWITCH_USERNAME", "mliness"),
+    password=os.getenv("TWITCH_PASSWORD", "NowBanip3."),
     claim_drops_startup=False,
     priority=[Priority.STREAK, Priority.DROPS, Priority.ORDER],
     enable_analytics=False,
