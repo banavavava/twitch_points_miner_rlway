@@ -79,7 +79,7 @@ twitch_miner = TwitchChannelPointsMiner(
         claim_drops=True,
         claim_moments=True,
         watch_streak=True,
-        community_goals=True,
+        community_goals=False,
         chat=ChatPresence.ONLINE,
         bet=BetSettings(
             strategy=Strategy.SMART,
@@ -116,7 +116,7 @@ twitch_miner.mine(
                 follow_raid=True,
                 claim_drops=True,
                 watch_streak=True,
-                community_goals=True,
+                community_goals=False,
                 bet=BetSettings(
                     strategy=Strategy.SMART,
                     percentage=24,
@@ -139,7 +139,7 @@ twitch_miner.mine(
                 follow_raid=True,
                 claim_drops=True,
                 watch_streak=True,
-                community_goals=True,
+                community_goals=False,
                 bet=BetSettings(
                     strategy=Strategy.SMART,
                     percentage=24,
