@@ -41,6 +41,5 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --fix-missing --no-ins
 
 ADD ./TwitchChannelPointsMiner ./TwitchChannelPointsMiner
 ADD ./example.py ./example.py
-ADD ./cookies ./cookies
 
 ENTRYPOINT ["python", "example.py"]
