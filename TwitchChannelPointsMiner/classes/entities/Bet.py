@@ -107,9 +107,18 @@ class BetSettings(object):
         self.max_points = max_points
         self.minimum_points = minimum_points
         self.stealth_mode = stealth_mode
-        self.filter_condition = filter_condition
+        self.filter_condition = self.__normalize_filter_condition(filter_condition)
         self.delay = delay
         self.delay_mode = delay_mode
+
+    @staticmethod
+    def __normalize_filter_condition(filter_condition):
+        if isinstance(filter_condition, (list, tuple)):
+            normalized_conditions = [condition for condition in filter_condition if condition is not None]
+            if len(normalized_conditions) == 0:
+                return None
+            return normalized_conditions
+        return filter_condition
 
     def default(self):
         self.strategy = self.strategy if self.strategy is not None else Strategy.SMART
@@ -251,39 +260,51 @@ class Bet(object):
 
     def skip(self) -> bool:
         if self.settings.filter_condition is not None:
-            # key == by , condition == where
-            key = self.settings.filter_condition.by
-            condition = self.settings.filter_condition.where
-            value = self.settings.filter_condition.value
-
-            fixed_key = (
-                key
-                if key not in [OutcomeKeys.DECISION_USERS, OutcomeKeys.DECISION_POINTS]
-                else key.replace("decision", "total")
+            conditions = (
+                self.settings.filter_condition
+                if isinstance(self.settings.filter_condition, (list, tuple))
+                else [self.settings.filter_condition]
             )
-            if key in [OutcomeKeys.TOTAL_USERS, OutcomeKeys.TOTAL_POINTS]:
-                compared_value = (
-                    self.outcomes[0][fixed_key] + self.outcomes[1][fixed_key]
-                )
-            else:
-                #outcome_index = char_decision_as_index(self.decision["choice"])
-                outcome_index = self.decision["choice"]
-                compared_value = self.outcomes[outcome_index][fixed_key]
+            compared_values = []
+            for filter_condition in conditions:
+                # key == by , condition == where
+                key = filter_condition.by
+                condition = filter_condition.where
+                value = filter_condition.value
 
-            # Check if condition is satisfied
-            if condition == Condition.GT:
-                if compared_value > value:
-                    return False, compared_value
-            elif condition == Condition.LT:
-                if compared_value < value:
-                    return False, compared_value
-            elif condition == Condition.GTE:
-                if compared_value >= value:
-                    return False, compared_value
-            elif condition == Condition.LTE:
-                if compared_value <= value:
-                    return False, compared_value
-            return True, compared_value  # Else skip the bet
+                fixed_key = (
+                    key
+                    if key not in [OutcomeKeys.DECISION_USERS, OutcomeKeys.DECISION_POINTS]
+                    else key.replace("decision", "total")
+                )
+                if key in [OutcomeKeys.TOTAL_USERS, OutcomeKeys.TOTAL_POINTS]:
+                    compared_value = (
+                        self.outcomes[0][fixed_key] + self.outcomes[1][fixed_key]
+                    )
+                else:
+                    #outcome_index = char_decision_as_index(self.decision["choice"])
+                    outcome_index = self.decision["choice"]
+                    compared_value = self.outcomes[outcome_index][fixed_key]
+
+                compared_values.append(compared_value)
+
+                # Check if condition is satisfied
+                if condition == Condition.GT:
+                    if compared_value > value:
+                        continue
+                elif condition == Condition.LT:
+                    if compared_value < value:
+                        continue
+                elif condition == Condition.GTE:
+                    if compared_value >= value:
+                        continue
+                elif condition == Condition.LTE:
+                    if compared_value <= value:
+                        continue
+
+                return True, compared_values[0] if len(compared_values) == 1 else compared_values
+
+            return False, compared_values[0] if len(compared_values) == 1 else compared_values
         else:
             return False, 0  # Default don't skip the bet
 
