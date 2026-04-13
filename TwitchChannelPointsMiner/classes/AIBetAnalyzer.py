@@ -64,6 +64,7 @@ class _AnalysisCache:
     @staticmethod
     def _key(
         outcomes: list[str],
+        outcome_details: list[dict],
         streamer: str,
         game: str,
         prediction_title: str,
@@ -72,6 +73,7 @@ class _AnalysisCache:
         payload = json.dumps(
             {
                 "outcomes": outcomes,
+                "outcome_details": outcome_details,
                 "streamer": streamer,
                 "game": game,
                 "prediction_title": prediction_title,
@@ -85,13 +87,21 @@ class _AnalysisCache:
     def get(
         self,
         outcomes: list[str],
+        outcome_details: list[dict],
         streamer: str,
         game: str,
         prediction_title: str,
         stream_title: str,
         ttl: int,
     ) -> Optional[AIAnalysisResult]:
-        key = self._key(outcomes, streamer, game, prediction_title, stream_title)
+        key = self._key(
+            outcomes,
+            outcome_details,
+            streamer,
+            game,
+            prediction_title,
+            stream_title,
+        )
         if key in self._store:
             result, ts = self._store[key]
             if time.time() - ts < ttl:
@@ -102,13 +112,21 @@ class _AnalysisCache:
     def set(
         self,
         outcomes: list[str],
+        outcome_details: list[dict],
         streamer: str,
         game: str,
         prediction_title: str,
         stream_title: str,
         result: AIAnalysisResult,
     ):
-        key = self._key(outcomes, streamer, game, prediction_title, stream_title)
+        key = self._key(
+            outcomes,
+            outcome_details,
+            streamer,
+            game,
+            prediction_title,
+            stream_title,
+        )
         self._store[key] = (result, time.time())
 
 
@@ -172,6 +190,7 @@ class AIBetAnalyzer:
     def analyze(
         self,
         outcome_titles: list[str],
+        outcome_details: Optional[list[dict]] = None,
         streamer: str = "",
         game: str = "",
         prediction_title: str = "",
@@ -181,15 +200,19 @@ class AIBetAnalyzer:
             logger.warning("[AIBetAnalyzer] Client is not initialized, skipping AI analysis")
             return None
 
+        outcome_details = outcome_details or []
+
         logger.info(
             "[AIBetAnalyzer] Analysis requested | "
             f"streamer={streamer or '<empty>'} | game={game or '<empty>'} | "
             f"prediction_title={prediction_title or '<empty>'} | "
-            f"stream_title={stream_title or '<empty>'} | outcomes={outcome_titles}"
+            f"stream_title={stream_title or '<empty>'} | outcomes={outcome_titles} | "
+            f"outcome_details={outcome_details}"
         )
 
         cached = _cache.get(
             outcome_titles,
+            outcome_details,
             streamer,
             game,
             prediction_title,
@@ -211,6 +234,7 @@ class AIBetAnalyzer:
                 future = executor.submit(
                     self._call_api,
                     outcome_titles,
+                    outcome_details,
                     streamer,
                     game,
                     prediction_title,
@@ -221,6 +245,7 @@ class AIBetAnalyzer:
             if result:
                 _cache.set(
                     outcome_titles,
+                    outcome_details,
                     streamer,
                     game,
                     prediction_title,
@@ -249,6 +274,7 @@ class AIBetAnalyzer:
     def _build_prompt(
         self,
         outcome_titles: list[str],
+        outcome_details: list[dict],
         streamer: str,
         game: str,
         prediction_title: str,
@@ -268,9 +294,14 @@ class AIBetAnalyzer:
             f"[{index}] {title}" for index, title in enumerate(outcome_titles)
         )
         parts.append(f"Outcome options:\n{outcomes}")
+        if outcome_details:
+            parts.append(
+                "Current betting market stats:\n"
+                + json.dumps(outcome_details, ensure_ascii=False, indent=2)
+            )
         parts.append(
             "Evaluate the streamer in the current game if relevant, compare all outcome options, "
-            "then return the best decision as preferred_outcome_index."
+            "use the betting market stats as a live signal, and then return the best decision as preferred_outcome_index."
         )
         if stream_title:
             parts.append(
@@ -280,6 +311,11 @@ class AIBetAnalyzer:
             parts.append(
                 "Extract any opponent nickname, account name, rank/MMR clue, or matchup hint from the stream title. "
                 "If such clues exist, verify them with web search and factor the matchup strength into the decision."
+            )
+        if outcome_details:
+            parts.append(
+                "Treat the betting market as evidence, not truth. Consider total users, total points, crowd skew, and odds. "
+                "If market signals and title/search context agree, confidence can rise. If they conflict, lower confidence."
             )
 
         if self.settings.use_web_search:
@@ -293,6 +329,7 @@ class AIBetAnalyzer:
     def _call_api(
         self,
         outcome_titles: list[str],
+        outcome_details: list[dict],
         streamer: str,
         game: str,
         prediction_title: str,
@@ -301,6 +338,7 @@ class AIBetAnalyzer:
         system = _SYSTEM_RU if self.settings.language == "ru" else _SYSTEM_EN
         user_msg = self._build_prompt(
             outcome_titles,
+            outcome_details,
             streamer,
             game,
             prediction_title,

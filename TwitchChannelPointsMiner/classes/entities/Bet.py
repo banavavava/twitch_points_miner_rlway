@@ -245,9 +245,24 @@ class Bet(object):
             outcome.get("title", f"Outcome {index}")
             for index, outcome in enumerate(self.outcomes)
         ]
+        outcome_details = [
+            {
+                "index": index,
+                "title": outcome.get("title", f"Outcome {index}"),
+                "color": outcome.get("color"),
+                "total_users": outcome.get(OutcomeKeys.TOTAL_USERS, 0),
+                "total_points": outcome.get(OutcomeKeys.TOTAL_POINTS, 0),
+                "percentage_users": outcome.get(OutcomeKeys.PERCENTAGE_USERS, 0),
+                "odds": outcome.get(OutcomeKeys.ODDS, 0),
+                "odds_percentage": outcome.get(OutcomeKeys.ODDS_PERCENTAGE, 0),
+                "top_points": outcome.get(OutcomeKeys.TOP_POINTS, 0),
+            }
+            for index, outcome in enumerate(self.outcomes)
+        ]
 
         self._ai_result = self.settings.ai_analyzer.analyze(
             outcome_titles=outcome_titles,
+            outcome_details=outcome_details,
             streamer=streamer_name or self.settings.ai_streamer_name,
             game=game_name or self.settings.ai_game_name,
             prediction_title=prediction_title,
