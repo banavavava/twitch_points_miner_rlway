@@ -84,6 +84,9 @@ class Stream(object):
 
     def game_name(self):
         return None if self.game in [{}, None] else self.game["name"]
+
+    def game_display_name(self):
+        return None if self.game in [{}, None] else self.game["displayName"]
     
     def game_id(self):
         return None if self.game in [{}, None] else self.game["id"]

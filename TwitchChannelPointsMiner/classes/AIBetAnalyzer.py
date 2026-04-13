@@ -1,23 +1,24 @@
 import hashlib
 import json
 import logging
-import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+import re
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import quote_plus
 
-logger = logging.getLogger(__name__)
+import httpx
 
 
 @dataclass
 class AIAnalyzerSettings:
-    api_key: str = ""
+    api_key: str
     model: str = "claude-haiku-4-5-20251001"
-    min_confidence: float = 0.3
-    use_web_search: bool = True
-    cache_ttl_seconds: int = 300
-    language: str = "ru"
-    timeout: int = 20
+    max_tokens: int = 140
+    min_confidence: float = 0.0
+    timeout: float = 8.0
+    web_lookup_enabled: bool = True
+    web_lookup_max_results: int = 2
+    web_lookup_max_chars: int = 320
 
 
 @dataclass
@@ -25,243 +26,302 @@ class AIAnalysisResult:
     confidence: float
     preferred_outcome: int
     reasoning: str
-    used_search: bool = False
     cached: bool = False
 
     def should_skip(self, min_confidence: float) -> bool:
-        return self.confidence < min_confidence
+        try:
+            return float(self.confidence) < float(min_confidence)
+        except (TypeError, ValueError):
+            return False
 
 
-class _AnalysisCache:
+class _Cache:
     def __init__(self):
-        self._store: dict[str, tuple[AIAnalysisResult, float]] = {}
+        self.store = {}
 
-    @staticmethod
-    def _key(
-        outcomes: list[str],
-        streamer: str,
-        game: str,
-        prediction_title: str,
-    ) -> str:
-        payload = json.dumps(
-            {
-                "outcomes": outcomes,
-                "streamer": streamer,
-                "game": game,
-                "prediction_title": prediction_title,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        return hashlib.md5(payload.encode("utf-8")).hexdigest()
+    def key(self, *args):
+        return hashlib.md5(
+            json.dumps(args, ensure_ascii=False, sort_keys=True).encode()
+        ).hexdigest()
 
-    def get(
-        self,
-        outcomes: list[str],
-        streamer: str,
-        game: str,
-        prediction_title: str,
-        ttl: int,
-    ) -> Optional[AIAnalysisResult]:
-        key = self._key(outcomes, streamer, game, prediction_title)
-        if key in self._store:
-            result, ts = self._store[key]
-            if time.time() - ts < ttl:
-                result.cached = True
-                return result
-        return None
+    def get(self, k):
+        return self.store.get(k)
 
-    def set(
-        self,
-        outcomes: list[str],
-        streamer: str,
-        game: str,
-        prediction_title: str,
-        result: AIAnalysisResult,
-    ):
-        key = self._key(outcomes, streamer, game, prediction_title)
-        self._store[key] = (result, time.time())
+    def set(self, k, v):
+        self.store[k] = v
 
 
-_cache = _AnalysisCache()
+_cache = _Cache()
 
 
-_SYSTEM_RU = """Ты аналитик Twitch-ставок.
-Твоя задача: по названию предсказания, имени стримера, текущей игре и вариантам исходов выбрать наиболее вероятный исход и оценить уверенность.
+SYSTEM_PROMPT = """
+    Выбери самый вероятный исход Twitch prediction.
 
-Что нужно учитывать:
-- Если известны имя стримера и текущая игра, оцени, насколько стример силен именно в этой игре или режиме.
-- Если варианты исхода связаны с матчем, раундом, командой, рейтингом, картой, стриком, челленджем или статистикой, используй это.
-- Если доступен веб-поиск, ищи актуальную информацию о форме стримера, результатах, рейтинге, матчапе и текущей игре.
-- Если исход зависит в основном от случайности, фана, настроения стримера или троллинга чата, уверенность должна быть низкой.
-- Выбери один preferred_outcome_index из списка вариантов и коротко объясни decision.
+    Правила:
+    - сравни все исходы;
+    - сначала смотри на game, prediction_title, stream_title и streamer;
+    - учитывай только релевантный опыт в этой конкретной игре;
+    - web_context используй только если он короткий и по делу;
+    - если данных о человеке нет, не выдумывай факты по имени;
+    - crowd и odds полезны, но это вторичные сигналы;
+    - reasoning очень коротко.
 
-Отвечай ТОЛЬКО валидным JSON без лишнего текста:
-{"confidence": 0.75, "preferred_outcome_index": 0, "reasoning": "кратко почему выбран этот исход"}
-"""
-
-_SYSTEM_EN = """You are a Twitch prediction betting analyst.
-Your task is to use the prediction title, streamer name, current game, and outcome options to pick the most likely outcome and estimate confidence.
-
-What to consider:
-- If streamer name and current game are known, assess how strong the streamer is in that specific game or mode.
-- If outcomes refer to a match, round, team, map, streak, challenge, or measurable stat, use that.
-- If web search is available, use current information about form, results, ranking, matchup, and current game.
-- If outcomes mainly depend on randomness, entertainment, chat trolling, or streamer mood, confidence should be low.
-- Pick one preferred_outcome_index from the listed options and briefly explain the decision.
-
-Reply ONLY with valid JSON and no extra text:
-{"confidence": 0.75, "preferred_outcome_index": 0, "reasoning": "brief reason for the chosen outcome"}
+    Верни ТОЛЬКО JSON:
+    {"confidence":0.0,"preferred_outcome_index":0,"reasoning":"short"}
 """
 
 
 class AIBetAnalyzer:
+
     def __init__(self, settings: AIAnalyzerSettings):
         self.settings = settings
-        self._client = None
-        self._init_client()
-
-    def _init_client(self):
-        try:
-            import anthropic
-
-            self._client = anthropic.Anthropic(api_key=self.settings.api_key)
-            logger.info("[AIBetAnalyzer] Anthropic client initialized")
-        except ImportError:
-            logger.error("[AIBetAnalyzer] Install dependency: pip install anthropic")
-        except Exception as exc:
-            logger.error(f"[AIBetAnalyzer] Initialization error: {exc}")
-
-    def analyze(
-        self,
-        outcome_titles: list[str],
-        streamer: str = "",
-        game: str = "",
-        prediction_title: str = "",
-    ) -> Optional[AIAnalysisResult]:
-        if not self._client:
-            return None
-
-        cached = _cache.get(
-            outcome_titles,
-            streamer,
-            game,
-            prediction_title,
-            self.settings.cache_ttl_seconds,
-        )
-        if cached:
-            logger.info(
-                f"[AIBetAnalyzer] cache hit confidence={cached.confidence:.2f} "
-                f"decision={cached.preferred_outcome}"
-            )
-            return cached
-
-        try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    self._call_api,
-                    outcome_titles,
-                    streamer,
-                    game,
-                    prediction_title,
-                )
-                result = future.result(timeout=self.settings.timeout)
-            if result:
-                _cache.set(outcome_titles, streamer, game, prediction_title, result)
-            return result
-        except TimeoutError:
-            logger.warning(
-                f"[AIBetAnalyzer] Analysis timed out after {self.settings.timeout}s"
-            )
-            return None
-        except Exception as exc:
-            logger.warning(f"[AIBetAnalyzer] Analysis error: {exc}")
-            return None
+        import anthropic
+        self.client = anthropic.Anthropic(api_key=settings.api_key)
 
     def _build_prompt(
         self,
-        outcome_titles: list[str],
-        streamer: str,
-        game: str,
-        prediction_title: str,
-    ) -> str:
-        parts = []
-        if prediction_title:
-            parts.append(f"Prediction title: {prediction_title}")
-        if streamer:
-            parts.append(f"Streamer: {streamer}")
-        if game:
-            parts.append(f"Current game: {game}")
-
-        outcomes = "\n".join(
-            f"[{index}] {title}" for index, title in enumerate(outcome_titles)
-        )
-        parts.append(f"Outcome options:\n{outcomes}")
-        parts.append(
-            "Evaluate the streamer in the current game if relevant, compare all outcome options, "
-            "then return the best decision as preferred_outcome_index."
-        )
-
-        if self.settings.use_web_search:
-            parts.append(
-                "Use web search when the prediction depends on real current performance, statistics, rankings, or matchup context."
+        outcome_details,
+        outcome_titles=None,
+        streamer="",
+        game="",
+        prediction_title="",
+        stream_title="",
+    ):
+        market = []
+        for index, d in enumerate(outcome_details):
+            market.append(
+                {
+                    "i": d.get("i", d.get("index", index)),
+                    "t": d.get(
+                        "title",
+                        outcome_titles[index]
+                        if outcome_titles and index < len(outcome_titles)
+                        else f"Outcome {index}",
+                    ),
+                    "u": d.get("percentage_users"),
+                    "p": d.get("total_points"),
+                    "o": d.get("odds"),
+                    "op": d.get("odds_percentage"),
+                    "tp": d.get("top_points"),
+                }
             )
 
-        return "\n".join(parts)
-
-    def _call_api(
-        self,
-        outcome_titles: list[str],
-        streamer: str,
-        game: str,
-        prediction_title: str,
-    ) -> Optional[AIAnalysisResult]:
-        system = _SYSTEM_RU if self.settings.language == "ru" else _SYSTEM_EN
-        user_msg = self._build_prompt(outcome_titles, streamer, game, prediction_title)
-
-        kwargs = {
-            "model": self.settings.model,
-            "max_tokens": 500,
-            "system": system,
-            "messages": [{"role": "user", "content": user_msg}],
+        payload = {
+            "streamer": streamer,
+            "game": game,
+            "prediction_title": prediction_title,
+            "stream_title": stream_title,
+            "web_context": self._lookup_web_context(streamer, game, prediction_title, stream_title),
+            "outcomes": market,
         }
-        if self.settings.use_web_search:
-            kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
 
-        response = self._client.messages.create(**kwargs)
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-        text = ""
-        used_search = False
-        for block in response.content:
-            if getattr(block, "type", None) == "text":
-                text += block.text
-            elif (
-                getattr(block, "type", None) == "tool_use"
-                and getattr(block, "name", None) == "web_search"
-            ):
-                used_search = True
+    def _lookup_web_context(self, streamer="", game="", prediction_title="", stream_title=""):
+        if not getattr(self.settings, "web_lookup_enabled", False):
+            return ""
 
-        text = text.strip()
-        if "```" in text:
-            chunks = text.split("```")
-            if len(chunks) > 1:
-                text = chunks[1].replace("json", "", 1).strip()
+        names = []
+        for source in [streamer, prediction_title, stream_title]:
+            if not source:
+                continue
+            names.extend(re.findall(r"@[A-Za-z0-9_]+|[A-Za-z][A-Za-z0-9_]{2,}", source))
 
-        data = json.loads(text)
-        confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
+        seen = set()
+        candidates = []
+        for name in names:
+            cleaned = name.lstrip("@")
+            lowered = cleaned.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            candidates.append(cleaned)
+
+        if not candidates:
+            return ""
+
+        snippets = []
+        max_results = max(1, int(getattr(self.settings, "web_lookup_max_results", 2)))
+        max_chars = max(120, int(getattr(self.settings, "web_lookup_max_chars", 320)))
+
+        for name in candidates[:2]:
+            query = quote_plus(f"{name} {game} streamer player")
+            url = f"https://duckduckgo.com/html/?q={query}"
+            try:
+                response = httpx.get(
+                    url,
+                    timeout=getattr(self.settings, "timeout", 8.0),
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                text = re.sub(r"<[^>]+>", " ", response.text)
+                text = re.sub(r"\s+", " ", text).strip()
+                if text:
+                    snippets.append(f"{name}: {text[:max_chars]}")
+            except Exception:
+                continue
+
+            if len(snippets) >= max_results:
+                break
+
+        return " | ".join(snippets)[:max_chars]
+
+    # =========================
+    # PARSER (ROBUST)
+    # =========================
+    def _parse(self, text: str) -> Optional[dict]:
+
+        if not text:
+            return None
+
+        text = text.strip().replace("```json", "").replace("```", "")
+
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+
+        try:
+            start = text.index("{")
+            end = text.rindex("}")
+            return json.loads(text[start:end + 1])
+        except Exception:
+            pass
+
+        confidence_match = re.search(r'"?confidence"?\s*[:=]\s*([0-9]*\.?[0-9]+)', text)
+        preferred_match = re.search(
+            r'"?(preferred_outcome_index|preferred_outcome|index|choice)"?\s*[:=]\s*(-?\d+)',
+            text,
+        )
+        reasoning_match = re.search(r'"?reasoning"?\s*[:=]\s*"([^"]+)"', text)
+
+        if confidence_match and preferred_match:
+            confidence = float(confidence_match.group(1))
+            confidence = max(0.0, min(confidence, 1.0))
+            preferred = int(preferred_match.group(2))
+            reasoning = (
+                reasoning_match.group(1)
+                if reasoning_match
+                else text[:160].replace("\n", " ").strip()
+            )
+            return {
+                "confidence": confidence,
+                "preferred_outcome_index": preferred,
+                "reasoning": reasoning,
+            }
+
+        return None
+
+    # =========================
+    # CALL
+    # =========================
+    def _call(self, messages):
+        resp = self.client.messages.create(
+            model=self.settings.model,
+            max_tokens=self.settings.max_tokens,
+            system=SYSTEM_PROMPT,
+            messages=messages
+        )
+
+        return "".join(
+            b.text for b in resp.content if getattr(b, "type", "") == "text"
+        )
+
+    # =========================
+    # FALLBACK
+    # =========================
+    def _fallback(self, outcome_details):
+
+        best = min(
+            outcome_details,
+            key=lambda x: x.get("percentage_users", 0)
+        )
+
+        return AIAnalysisResult(
+            confidence=0.45,
+            preferred_outcome=best.get("i", best.get("index", 0)),
+            reasoning="fallback: crowd heuristic",
+            cached=False
+        )
+
+    # =========================
+    # MAIN
+    # =========================
+    def analyze(
+        self,
+        outcome_details,
+        outcome_titles=None,
+        streamer="",
+        game="",
+        prediction_title="",
+        stream_title="",
+        title="",
+    ):
+        effective_prediction_title = prediction_title or title
+
+        key = _cache.key(
+            outcome_details,
+            outcome_titles,
+            streamer,
+            game,
+            effective_prediction_title,
+            stream_title,
+        )
+
+        cached = _cache.get(key)
+        if cached:
+            cached["cached"] = True
+            return AIAnalysisResult(**cached)
+
+        prompt = self._build_prompt(
+            outcome_details=outcome_details,
+            outcome_titles=outcome_titles,
+            streamer=streamer,
+            game=game,
+            prediction_title=effective_prediction_title,
+            stream_title=stream_title,
+        )
+
+        raw = self._call([{"role": "user", "content": prompt}])
+        data = self._parse(raw)
+
+        if not data:
+            logging.warning("AIBetAnalyzer parse failed, raw response: %r", raw)
+            repair_prompt = (
+                "Convert this analysis to strict JSON only with keys "
+                'confidence, preferred_outcome_index, reasoning. '
+                "If the text already implies a choice, preserve it.\n\n"
+                f"analysis:\n{raw}"
+            )
+            repaired_raw = self._call([{"role": "user", "content": repair_prompt}])
+            data = self._parse(repaired_raw)
+
+        if not data:
+            return self._fallback(outcome_details)
+
+        confidence = float(data.get("confidence", 0.5))
         preferred = int(data.get("preferred_outcome_index", 0))
-        preferred = max(0, min(preferred, len(outcome_titles) - 1))
-        reasoning = str(data.get("reasoning", "")).strip()
+        reasoning = str(data.get("reasoning", "")).replace("\n", " ").strip()
 
-        result = AIAnalysisResult(
-            confidence=confidence,
-            preferred_outcome=preferred,
-            reasoning=reasoning,
-            used_search=used_search,
-        )
-        logger.info(
-            f"[AIBetAnalyzer] confidence={confidence:.2f} | decision=[{preferred}] "
-            f"{outcome_titles[preferred]} | {'search' if used_search else 'no-search'} | "
-            f"{reasoning[:100]}"
-        )
-        return result
+        if reasoning.startswith("{") and '"reasoning"' in reasoning:
+            nested = self._parse(reasoning)
+            if nested:
+                reasoning = str(nested.get("reasoning", "")).replace("\n", " ").strip()
+
+        valid = {
+            o.get("i", o.get("index", index))
+            for index, o in enumerate(outcome_details)
+        }
+
+        if preferred not in valid:
+            preferred = min(valid)
+
+        result = {
+            "confidence": confidence,
+            "preferred_outcome": preferred,
+            "reasoning": reasoning,
+            "cached": False
+        }
+
+        _cache.set(key, result)
+
+        return AIAnalysisResult(**result)

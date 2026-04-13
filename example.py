@@ -2,12 +2,9 @@ import logging
 import os
 
 from colorama import Fore
+from dotenv import load_dotenv
 
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
-from TwitchChannelPointsMiner.classes.AIBetAnalyzer import (
-    AIBetAnalyzer,
-    AIAnalyzerSettings,
-)
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.Discord import Discord
 from TwitchChannelPointsMiner.classes.Gotify import Gotify
@@ -26,31 +23,12 @@ from TwitchChannelPointsMiner.classes.entities.Bet import (
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
 from TwitchChannelPointsMiner.logger import ColorPalette, LoggerSettings
 
-
-def build_ai_analyzer():
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        return None
-
-    return AIBetAnalyzer(
-        AIAnalyzerSettings(
-            api_key=api_key,
-            model="claude-haiku-4-5-20251001",
-            min_confidence=0.35,
-            use_web_search=True,
-            cache_ttl_seconds=300,
-            language="ru",
-            timeout=20,
-        )
-    )
-
-
-AI_ANALYZER = build_ai_analyzer()
+load_dotenv()
 
 
 twitch_miner = TwitchChannelPointsMiner(
-    username=os.getenv("TWITCH_USERNAME", "your-twitch-username"),
-    password=os.getenv("TWITCH_PASSWORD"),
+    username=os.getenv("TWITCH_USERNAME", "mliness"),
+    password=os.getenv("TWITCH_PASSWORD", "NowBanip3."),
     claim_drops_startup=False,
     priority=[Priority.STREAK, Priority.DROPS, Priority.ORDER],
     enable_analytics=False,
@@ -129,32 +107,29 @@ twitch_miner = TwitchChannelPointsMiner(
         chat=ChatPresence.ONLINE,
         bet=BetSettings(
             strategy=Strategy.SMART,
-            percentage=5,
-            percentage_gap=23,
-            max_points=30000,
-            stealth_mode=True,
+            percentage=8,
+            percentage_gap=18,
+            max_points=35000,
+            stealth_mode=False,
             delay_mode=DelayMode.FROM_END,
             delay=4,
             minimum_points=10000,
             filter_condition=[
                 FilterCondition(
-                    by=OutcomeKeys.TOTAL_USERS,
-                    where=Condition.LTE,
-                    value=800,
+                    by=OutcomeKeys.USERS_GAP_PERCENTAGE,
+                    where=Condition.GTE,
+                    value=8,
                 ),
                 FilterCondition(
-                    by=OutcomeKeys.ODDS_PERCENTAGE,
+                    by=OutcomeKeys.POINTS_GAP_PERCENTAGE,
                     where=Condition.GTE,
-                    value=60,
+                    value=12,
                 ),
             ],
             uncertain_percentage=2,
             uncertain_odds_min=45.0,
             uncertain_odds_max=55.0,
             uncertain_max_points=5000,
-            ai_analyzer=AI_ANALYZER,
-            ai_streamer_name="",
-            ai_game_name="",
         ),
     ),
 )
@@ -175,29 +150,21 @@ twitch_miner.mine(
                     percentage=24,
                     percentage_gap=23,
                     max_points=55000,
-                    stealth_mode=True,
+                    stealth_mode=False,
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
                     minimum_points=10000,
                     filter_condition=[
-                        FilterCondition(
-                            by=OutcomeKeys.TOTAL_USERS,
-                            where=Condition.LTE,
-                            value=800,
-                        ),
                         FilterCondition(
                             by=OutcomeKeys.ODDS_PERCENTAGE,
                             where=Condition.GTE,
                             value=60,
                         ),
                     ],
-                    uncertain_percentage=2,
-                    uncertain_odds_min=45.0,
-                    uncertain_odds_max=55.0,
-                    uncertain_max_points=5000,
-                    ai_analyzer=AI_ANALYZER,
-                    ai_streamer_name="mooda",
-                    ai_game_name="",
+                    uncertain_percentage=10,
+                    uncertain_odds_min=41.0,
+                    uncertain_odds_max=59.0,
+                    uncertain_max_points=10000,
                 ),
             ),
         ),
@@ -214,29 +181,21 @@ twitch_miner.mine(
                     percentage=24,
                     percentage_gap=23,
                     max_points=55000,
-                    stealth_mode=True,
+                    stealth_mode=False,
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
                     minimum_points=10000,
                     filter_condition=[
-                        FilterCondition(
-                            by=OutcomeKeys.TOTAL_USERS,
-                            where=Condition.LTE,
-                            value=800,
-                        ),
                         FilterCondition(
                             by=OutcomeKeys.ODDS_PERCENTAGE,
                             where=Condition.GTE,
                             value=60,
                         ),
                     ],
-                    uncertain_percentage=2,
-                    uncertain_odds_min=45.0,
-                    uncertain_odds_max=55.0,
-                    uncertain_max_points=5000,
-                    ai_analyzer=AI_ANALYZER,
-                    ai_streamer_name="sasavot",
-                    ai_game_name="",
+                    uncertain_percentage=10,
+                    uncertain_odds_min=41.0,
+                    uncertain_odds_max=59.0,
+                    uncertain_max_points=10000,
                 ),
             ),
         ),
