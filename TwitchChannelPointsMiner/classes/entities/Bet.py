@@ -249,58 +249,41 @@ class Bet(object):
         else:
             return 0
 
-    def __get_filter_conditions(self):
-        filter_condition = self.settings.filter_condition
-        if filter_condition is None:
-            return []
-        if isinstance(filter_condition, list):
-            return filter_condition
-        return [filter_condition]
-
-    def __get_compared_value(self, key):
-        fixed_key = (
-            key
-            if key not in [OutcomeKeys.DECISION_USERS, OutcomeKeys.DECISION_POINTS]
-            else key.replace("decision", "total")
-        )
-        if key in [OutcomeKeys.TOTAL_USERS, OutcomeKeys.TOTAL_POINTS]:
-            return sum(outcome[fixed_key] for outcome in self.outcomes)
-
-        outcome_index = self.decision["choice"]
-        return self.outcomes[outcome_index][fixed_key]
-
-    @staticmethod
-    def __condition_matches(condition, compared_value, value):
-        if condition == Condition.GT:
-            return compared_value > value
-        if condition == Condition.LT:
-            return compared_value < value
-        if condition == Condition.GTE:
-            return compared_value >= value
-        if condition == Condition.LTE:
-            return compared_value <= value
-        return False
-
     def skip(self) -> bool:
-        filter_conditions = self.__get_filter_conditions()
-        if filter_conditions:
-            compared_values = []
-            for filter_condition in filter_conditions:
-                key = filter_condition.by
-                condition = filter_condition.where
-                value = filter_condition.value
-                compared_value = self.__get_compared_value(key)
-                compared_values.append(
-                    {
-                        "by": key,
-                        "where": str(condition),
-                        "value": value,
-                        "compared_value": compared_value,
-                    }
+        if self.settings.filter_condition is not None:
+            # key == by , condition == where
+            key = self.settings.filter_condition.by
+            condition = self.settings.filter_condition.where
+            value = self.settings.filter_condition.value
+
+            fixed_key = (
+                key
+                if key not in [OutcomeKeys.DECISION_USERS, OutcomeKeys.DECISION_POINTS]
+                else key.replace("decision", "total")
+            )
+            if key in [OutcomeKeys.TOTAL_USERS, OutcomeKeys.TOTAL_POINTS]:
+                compared_value = (
+                    self.outcomes[0][fixed_key] + self.outcomes[1][fixed_key]
                 )
-                if not self.__condition_matches(condition, compared_value, value):
-                    return True, compared_values
-            return False, compared_values
+            else:
+                #outcome_index = char_decision_as_index(self.decision["choice"])
+                outcome_index = self.decision["choice"]
+                compared_value = self.outcomes[outcome_index][fixed_key]
+
+            # Check if condition is satisfied
+            if condition == Condition.GT:
+                if compared_value > value:
+                    return False, compared_value
+            elif condition == Condition.LT:
+                if compared_value < value:
+                    return False, compared_value
+            elif condition == Condition.GTE:
+                if compared_value >= value:
+                    return False, compared_value
+            elif condition == Condition.LTE:
+                if compared_value <= value:
+                    return False, compared_value
+            return True, compared_value  # Else skip the bet
         else:
             return False, 0  # Default don't skip the bet
 

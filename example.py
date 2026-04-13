@@ -112,7 +112,6 @@ twitch_miner.mine(
                     delay=4,
                     minimum_points=10000,
                     filter_condition=[
-                        FilterCondition(by=OutcomeKeys.TOTAL_USERS, where=Condition.LTE, value=800),
                         FilterCondition(by=OutcomeKeys.ODDS_PERCENTAGE, where=Condition.GTE, value=60)
                     ]
                 )
@@ -136,7 +135,6 @@ twitch_miner.mine(
                     delay=4,
                     minimum_points=10000,
                     filter_condition=[
-                        FilterCondition(by=OutcomeKeys.TOTAL_USERS, where=Condition.LTE, value=800),
                         FilterCondition(by=OutcomeKeys.ODDS_PERCENTAGE, where=Condition.GTE, value=60)
                     ]
                 )
