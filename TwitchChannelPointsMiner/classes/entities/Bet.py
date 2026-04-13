@@ -45,6 +45,10 @@ class OutcomeKeys(object):
     TOTAL_POINTS = "total_points"
     DECISION_USERS = "decision_users"
     DECISION_POINTS = "decision_points"
+    USERS_GAP = "users_gap"
+    USERS_GAP_PERCENTAGE = "users_gap_percentage"
+    POINTS_GAP = "points_gap"
+    POINTS_GAP_PERCENTAGE = "points_gap_percentage"
 
 
 class DelayMode(Enum):
@@ -314,6 +318,13 @@ class Bet(object):
         else:
             return 0
 
+    def __get_gap_value(self, first, second):
+        return abs(first - second)
+
+    def __get_gap_percentage(self, first, second):
+        total = first + second
+        return float_round(0 if total == 0 else (100 * abs(first - second)) / total)
+
     def __get_filter_conditions(self):
         filter_condition = self.settings.filter_condition
         if filter_condition is None:
@@ -330,6 +341,38 @@ class Bet(object):
         )
         if key in [OutcomeKeys.TOTAL_USERS, OutcomeKeys.TOTAL_POINTS]:
             return sum(outcome[fixed_key] for outcome in self.outcomes)
+
+        if key == OutcomeKeys.USERS_GAP:
+            if len(self.outcomes) < 2:
+                return 0
+            return self.__get_gap_value(
+                self.outcomes[0][OutcomeKeys.TOTAL_USERS],
+                self.outcomes[1][OutcomeKeys.TOTAL_USERS],
+            )
+
+        if key == OutcomeKeys.USERS_GAP_PERCENTAGE:
+            if len(self.outcomes) < 2:
+                return 0
+            return self.__get_gap_percentage(
+                self.outcomes[0][OutcomeKeys.TOTAL_USERS],
+                self.outcomes[1][OutcomeKeys.TOTAL_USERS],
+            )
+
+        if key == OutcomeKeys.POINTS_GAP:
+            if len(self.outcomes) < 2:
+                return 0
+            return self.__get_gap_value(
+                self.outcomes[0][OutcomeKeys.TOTAL_POINTS],
+                self.outcomes[1][OutcomeKeys.TOTAL_POINTS],
+            )
+
+        if key == OutcomeKeys.POINTS_GAP_PERCENTAGE:
+            if len(self.outcomes) < 2:
+                return 0
+            return self.__get_gap_percentage(
+                self.outcomes[0][OutcomeKeys.TOTAL_POINTS],
+                self.outcomes[1][OutcomeKeys.TOTAL_POINTS],
+            )
 
         outcome_index = self.decision["choice"]
         return self.outcomes[outcome_index][fixed_key]
