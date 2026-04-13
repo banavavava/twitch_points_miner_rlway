@@ -122,7 +122,7 @@ twitch_miner.mine(
                     percentage=24,
                     percentage_gap=30,
                     max_points=55000,
-                    stealth_mode=False,
+                    stealth_mode=False, 
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
                     minimum_points=10000,
