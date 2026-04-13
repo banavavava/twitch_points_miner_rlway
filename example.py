@@ -244,7 +244,7 @@ twitch_miner.mine(
             ),
         ),
         Streamer(
-            "Mingo",
+            "Demon1",
             settings=StreamerSettings(
                 make_predictions=True,
                 follow_raid=True,
@@ -277,7 +277,7 @@ twitch_miner.mine(
                     uncertain_odds_max=55.0,
                     uncertain_max_points=5000,
                     ai_analyzer=AI_ANALYZER,
-                    ai_streamer_name="Mingo",
+                    ai_streamer_name="Demon1",
                     ai_game_name="",
                 ),
             ),
