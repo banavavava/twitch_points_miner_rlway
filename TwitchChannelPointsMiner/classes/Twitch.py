@@ -673,11 +673,6 @@ class Twitch(object):
 
         response = self.post_gql_request(json_data)
         if response != {}:
-            if "data" not in response:
-                logger.error(
-                    f"Invalid GQL response for channel points context: {response}"
-                )
-                return
             if response["data"]["community"] is None:
                 raise StreamerDoesNotExistException
             channel = response["data"]["community"]["channel"]
@@ -702,14 +697,12 @@ class Twitch(object):
                 self.contribute_to_community_goals(streamer)
 
     def make_predictions(self, event):
-        # AI analysis disabled.
-        # event.bet.analyze_with_ai(
-        #     prediction_title=event.title,
-        #     streamer_name=event.streamer.username,
-        #     game_name=event.streamer.stream.game_display_name() or "",
-        #     stream_title=event.streamer.stream.title or "",
-        #     can_use_ai=event.streamer.explicitly_configured,
-        # )
+        event.bet.analyze_with_ai(
+            prediction_title=event.title,
+            streamer_name=event.streamer.username,
+            game_name=event.streamer.stream.game_name() or "",
+            can_use_ai=event.streamer.explicitly_configured,
+        )
         decision = event.bet.calculate(event.streamer.channel_points)
 
         logger.info(
@@ -746,19 +739,6 @@ class Twitch(object):
                         "event": Events.BET_FILTERS,
                     },
                 )
-                if event.bet.get_decision_explanation():
-                    logger.info(
-                        f"Bet explanation before skip: {event.bet.get_decision_explanation()}",
-                        extra={
-                            "emoji": ":mag:",
-                            "event": Events.BET_FILTERS,
-                            "skip_telegram": True,
-                            "skip_discord": True,
-                            "skip_webhook": True,
-                            "skip_matrix": True,
-                            "skip_gotify": True,
-                        },
-                    )
             else:
                 if decision["amount"] >= 10:
                     logger.info(
@@ -768,19 +748,6 @@ class Twitch(object):
                             "event": Events.BET_GENERAL,
                         },
                     )
-                    if event.bet.get_decision_explanation():
-                        logger.info(
-                            f"Bet explanation: {event.bet.get_decision_explanation()}",
-                            extra={
-                                "emoji": ":mag:",
-                                "event": Events.BET_GENERAL,
-                                "skip_telegram": True,
-                                "skip_discord": True,
-                                "skip_webhook": True,
-                                "skip_matrix": True,
-                                "skip_gotify": True,
-                            },
-                        )
 
                     json_data = copy.deepcopy(GQLOperations.MakePrediction)
                     json_data["variables"] = {
@@ -814,19 +781,6 @@ class Twitch(object):
                             "event": Events.BET_GENERAL,
                         },
                     )
-                    if event.bet.get_decision_explanation():
-                        logger.info(
-                            f"Bet explanation: {event.bet.get_decision_explanation()}",
-                            extra={
-                                "emoji": ":mag:",
-                                "event": Events.BET_GENERAL,
-                                "skip_telegram": True,
-                                "skip_discord": True,
-                                "skip_webhook": True,
-                                "skip_matrix": True,
-                                "skip_gotify": True,
-                            },
-                        )
         else:
             logger.info(
                 f"Oh no! The event is not active anymore! Current status: {event.status}",
