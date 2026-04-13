@@ -90,6 +90,7 @@ class BetSettings(object):
         "ai_analyzer",
         "ai_streamer_name",
         "ai_game_name",
+        "ai_min_stake_factor",
     ]
 
     def __init__(
@@ -110,6 +111,7 @@ class BetSettings(object):
         ai_analyzer=None,
         ai_streamer_name: str = "",
         ai_game_name: str = "",
+        ai_min_stake_factor: float = 0.55,
     ):
         self.strategy = strategy
         self.percentage = percentage
@@ -127,6 +129,7 @@ class BetSettings(object):
         self.ai_analyzer = ai_analyzer
         self.ai_streamer_name = ai_streamer_name
         self.ai_game_name = ai_game_name
+        self.ai_min_stake_factor = ai_min_stake_factor
 
     def default(self):
         self.strategy = self.strategy if self.strategy is not None else Strategy.SMART
@@ -157,16 +160,7 @@ class BetSettings(object):
         )
 
     def get_ai_delay_seconds(self, can_use_ai: bool = True) -> float:
-        if self.ai_analyzer is None or can_use_ai is False:
-            return 0
-
-        analyzer_settings = getattr(self.ai_analyzer, "settings", None)
-        timeout = getattr(analyzer_settings, "timeout", 0)
-
-        try:
-            return max(float(timeout), 0)
-        except (TypeError, ValueError):
-            return 0
+        return 0
 
 
 class Bet(object):
@@ -177,6 +171,7 @@ class Bet(object):
         "total_points",
         "settings",
         "_ai_result",
+        "_decision_explanation",
     ]
 
     def __init__(self, outcomes: list, settings: BetSettings):
@@ -187,6 +182,7 @@ class Bet(object):
         self.total_points = 0
         self.settings = settings
         self._ai_result = None
+        self._decision_explanation = ""
 
     def update_outcomes(self, outcomes):
         for index in range(0, len(self.outcomes)):
@@ -238,37 +234,7 @@ class Bet(object):
         can_use_ai: bool = True,
     ) -> bool:
         self._ai_result = None
-        if self.settings.ai_analyzer is None or can_use_ai is False:
-            return False
-
-        outcome_titles = [
-            outcome.get("title", f"Outcome {index}")
-            for index, outcome in enumerate(self.outcomes)
-        ]
-        outcome_details = [
-            {
-                "index": index,
-                "title": outcome.get("title", f"Outcome {index}"),
-                "color": outcome.get("color"),
-                "total_users": outcome.get(OutcomeKeys.TOTAL_USERS, 0),
-                "total_points": outcome.get(OutcomeKeys.TOTAL_POINTS, 0),
-                "percentage_users": outcome.get(OutcomeKeys.PERCENTAGE_USERS, 0),
-                "odds": outcome.get(OutcomeKeys.ODDS, 0),
-                "odds_percentage": outcome.get(OutcomeKeys.ODDS_PERCENTAGE, 0),
-                "top_points": outcome.get(OutcomeKeys.TOP_POINTS, 0),
-            }
-            for index, outcome in enumerate(self.outcomes)
-        ]
-
-        self._ai_result = self.settings.ai_analyzer.analyze(
-            outcome_titles=outcome_titles,
-            outcome_details=outcome_details,
-            streamer=streamer_name or self.settings.ai_streamer_name,
-            game=game_name or self.settings.ai_game_name,
-            prediction_title=prediction_title,
-            stream_title=stream_title,
-        )
-        return self._ai_result is not None
+        return False
 
     def __repr__(self):
         return (
@@ -399,15 +365,12 @@ class Bet(object):
         else:
             return False, 0
 
+    def get_decision_explanation(self) -> str:
+        return self._decision_explanation
+
     def calculate(self, balance: int) -> dict:
         self.decision = {"choice": None, "amount": 0, "id": None}
-
-        if self._ai_result is not None:
-            ai_choice = self._ai_result.preferred_outcome
-            if 0 <= ai_choice < len(self.outcomes):
-                self.decision["choice"] = ai_choice
-            else:
-                self._ai_result = None
+        self._decision_explanation = ""
 
         if self.decision["choice"] is None and self.settings.strategy == Strategy.MOST_VOTED:
             self.decision["choice"] = self.__return_choice(OutcomeKeys.TOTAL_USERS)
@@ -450,41 +413,58 @@ class Bet(object):
 
             odds_pct = self.outcomes[index][OutcomeKeys.ODDS_PERCENTAGE]
 
+            amount_reasons = []
+            base_amount = 0
+
             if self.__is_uncertain_odds(odds_pct):
                 raw_amount = int(balance * (self.settings.uncertain_percentage / 100))
-                self.decision["amount"] = min(raw_amount, self.settings.uncertain_max_points)
+                base_amount = min(raw_amount, self.settings.uncertain_max_points)
+                self.decision["amount"] = base_amount
+                amount_reasons.append(
+                    f"uncertain odds zone {odds_pct}% -> cautious mode {self.settings.uncertain_percentage}% of balance"
+                )
+                if base_amount != raw_amount:
+                    amount_reasons.append(
+                        f"capped by uncertain_max_points={self.settings.uncertain_max_points:,}"
+                    )
             else:
-                self.decision["amount"] = min(
-                    int(balance * (self.settings.percentage / 100)),
-                    self.settings.max_points,
+                raw_amount = int(balance * (self.settings.percentage / 100))
+                base_amount = min(raw_amount, self.settings.max_points)
+                self.decision["amount"] = base_amount
+                amount_reasons.append(
+                    f"base stake {self.settings.percentage}% of balance {balance:,} -> {raw_amount:,}"
                 )
-
-            if self._ai_result is not None:
-                min_confidence = getattr(
-                    getattr(self.settings.ai_analyzer, "settings", None),
-                    "min_confidence",
-                    None,
-                )
-                if (
-                    min_confidence is not None
-                    and self._ai_result.should_skip(min_confidence)
-                ):
-                    self.decision = {"choice": None, "amount": 0, "id": None}
-                    return self.decision
-
-                self.decision["amount"] = int(
-                    self.decision["amount"] * self._ai_result.confidence
-                )
+                if base_amount != raw_amount:
+                    amount_reasons.append(
+                        f"capped by max_points={self.settings.max_points:,}"
+                    )
 
             if (
                 self.settings.stealth_mode is True
                 and self.decision["amount"] >= self.outcomes[index][OutcomeKeys.TOP_POINTS]
             ):
+                original_amount = self.decision["amount"]
                 reduce_amount = uniform(1, 5)
                 self.decision["amount"] = (
                     self.outcomes[index][OutcomeKeys.TOP_POINTS] - reduce_amount
                 )
+                amount_reasons.append(
+                    f"stealth mode trims stake {int(original_amount):,} -> {int(self.decision['amount']):,} to stay below top predictor"
+                )
 
             self.decision["amount"] = int(self.decision["amount"])
+
+            selected_outcome = self.outcomes[index]
+            market_summary = (
+                f"picked '{selected_outcome['title']}' with market "
+                f"{selected_outcome[OutcomeKeys.TOTAL_POINTS]:,} points, "
+                f"{selected_outcome[OutcomeKeys.TOTAL_USERS]:,} users, "
+                f"odds {selected_outcome[OutcomeKeys.ODDS]}"
+            )
+            strategy_summary = f"selection source: {self.settings.strategy}"
+            self._decision_explanation = (
+                f"{strategy_summary}. {market_summary}. "
+                f"Stake sizing: {'; '.join(amount_reasons)}."
+            )
 
         return self.decision

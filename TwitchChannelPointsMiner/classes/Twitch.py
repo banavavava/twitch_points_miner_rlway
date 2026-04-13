@@ -749,6 +749,19 @@ class Twitch(object):
                             "event": Events.BET_GENERAL,
                         },
                     )
+                    if event.bet.get_decision_explanation():
+                        logger.info(
+                            f"Bet explanation: {event.bet.get_decision_explanation()}",
+                            extra={
+                                "emoji": ":mag:",
+                                "event": Events.BET_GENERAL,
+                                "skip_telegram": True,
+                                "skip_discord": True,
+                                "skip_webhook": True,
+                                "skip_matrix": True,
+                                "skip_gotify": True,
+                            },
+                        )
 
                     json_data = copy.deepcopy(GQLOperations.MakePrediction)
                     json_data["variables"] = {
@@ -782,6 +795,19 @@ class Twitch(object):
                             "event": Events.BET_GENERAL,
                         },
                     )
+                    if event.bet.get_decision_explanation():
+                        logger.info(
+                            f"Bet explanation: {event.bet.get_decision_explanation()}",
+                            extra={
+                                "emoji": ":mag:",
+                                "event": Events.BET_GENERAL,
+                                "skip_telegram": True,
+                                "skip_discord": True,
+                                "skip_webhook": True,
+                                "skip_matrix": True,
+                                "skip_gotify": True,
+                            },
+                        )
         else:
             logger.info(
                 f"Oh no! The event is not active anymore! Current status: {event.status}",
