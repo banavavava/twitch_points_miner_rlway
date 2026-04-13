@@ -87,6 +87,10 @@ class BetSettings(object):
         "filter_condition",
         "delay",
         "delay_mode",
+        "uncertain_percentage",
+        "uncertain_odds_min",
+        "uncertain_odds_max",
+        "uncertain_max_points",
     ]
 
     def __init__(
@@ -100,6 +104,10 @@ class BetSettings(object):
         filter_condition: FilterCondition = None,
         delay: float = None,
         delay_mode: DelayMode = None,
+        uncertain_percentage: float = None,
+        uncertain_odds_min: float = 41.0,
+        uncertain_odds_max: float = 59.0,
+        uncertain_max_points: int = 5000,
     ):
         self.strategy = strategy
         self.percentage = percentage
@@ -110,6 +118,10 @@ class BetSettings(object):
         self.filter_condition = self.__normalize_filter_condition(filter_condition)
         self.delay = delay
         self.delay_mode = delay_mode
+        self.uncertain_percentage = uncertain_percentage
+        self.uncertain_odds_min = uncertain_odds_min
+        self.uncertain_odds_max = uncertain_odds_max
+        self.uncertain_max_points = uncertain_max_points
 
     @staticmethod
     def __normalize_filter_condition(filter_condition):
@@ -139,7 +151,7 @@ class BetSettings(object):
         )
 
     def __repr__(self):
-        return f"BetSettings(strategy={self.strategy}, percentage={self.percentage}, percentage_gap={self.percentage_gap}, max_points={self.max_points}, minimum_points={self.minimum_points}, stealth_mode={self.stealth_mode})"
+        return f"BetSettings(strategy={self.strategy}, percentage={self.percentage}, percentage_gap={self.percentage_gap}, max_points={self.max_points}, minimum_points={self.minimum_points}, stealth_mode={self.stealth_mode}, uncertain_percentage={self.uncertain_percentage}, uncertain_odds=[{self.uncertain_odds_min}-{self.uncertain_odds_max}], uncertain_max_points={self.uncertain_max_points})"
 
 
 class Bet(object):
@@ -258,6 +270,13 @@ class Bet(object):
         else:
             return 0
 
+    def __is_uncertain_odds(self, odds_percentage) -> bool:
+        return (
+            self.settings.uncertain_percentage is not None
+            and self.settings.uncertain_percentage > 0
+            and self.settings.uncertain_odds_min <= odds_percentage <= self.settings.uncertain_odds_max
+        )
+
     def skip(self) -> bool:
         if self.settings.filter_condition is not None:
             conditions = (
@@ -301,6 +320,12 @@ class Bet(object):
                 elif condition == Condition.LTE:
                     if compared_value <= value:
                         continue
+
+                if (
+                    key == OutcomeKeys.ODDS_PERCENTAGE
+                    and self.__is_uncertain_odds(compared_value)
+                ):
+                    continue
 
                 return True, compared_values[0] if len(compared_values) == 1 else compared_values
 
@@ -349,10 +374,17 @@ class Bet(object):
             #index = char_decision_as_index(self.decision["choice"])
             index = self.decision["choice"]
             self.decision["id"] = self.outcomes[index]["id"]
-            self.decision["amount"] = min(
-                int(balance * (self.settings.percentage / 100)),
-                self.settings.max_points,
-            )
+            odds_percentage = self.outcomes[index][OutcomeKeys.ODDS_PERCENTAGE]
+            if self.__is_uncertain_odds(odds_percentage):
+                self.decision["amount"] = min(
+                    int(balance * (self.settings.uncertain_percentage / 100)),
+                    self.settings.uncertain_max_points,
+                )
+            else:
+                self.decision["amount"] = min(
+                    int(balance * (self.settings.percentage / 100)),
+                    self.settings.max_points,
+                )
             if (
                 self.settings.stealth_mode is True
                 and self.decision["amount"]

@@ -62,6 +62,10 @@ twitch_miner = TwitchChannelPointsMiner(
             delay_mode=DelayMode.FROM_END,
             delay=4,                # Ставка за 4 секунды до конца таймера
             minimum_points=10000,   # Минимальное количество очков для ставки
+            uncertain_percentage=1,
+            uncertain_odds_min=41,
+            uncertain_odds_max=59,
+            uncertain_max_points=1500,
             filter_condition=FilterCondition(
                 by=OutcomeKeys.ODDS_PERCENTAGE, where=Condition.GTE, value=60
             )
@@ -98,6 +102,10 @@ twitch_miner.mine(
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
                     minimum_points=10000,
+                    uncertain_percentage=10,
+                    uncertain_odds_min=41,
+                    uncertain_odds_max=59,
+                    uncertain_max_points=12000,
                     filter_condition=FilterCondition(
                         by=OutcomeKeys.ODDS_PERCENTAGE, where=Condition.GTE, value=60
                     )
@@ -121,6 +129,10 @@ twitch_miner.mine(
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
                     minimum_points=10000,
+                    uncertain_percentage=10,
+                    uncertain_odds_min=41,
+                    uncertain_odds_max=59,
+                    uncertain_max_points=12000,
                     filter_condition=FilterCondition(
                         by=OutcomeKeys.ODDS_PERCENTAGE, where=Condition.GTE, value=60
                     )
