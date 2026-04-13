@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import logging
 import os
 import random
@@ -29,6 +31,14 @@ from TwitchChannelPointsMiner.utils import (
     set_default_settings,
 )
 
+# Suppress:
+#   - chardet.charsetprober - [feed]
+#   - chardet.charsetprober - [get_confidence]
+#   - requests - [Starting new HTTPS connection (1)]
+#   - Flask (werkzeug) logs
+#   - irc.client - [process_data]
+#   - irc.client - [_dispatcher]
+#   - irc.client - [_handle_message]
 logging.getLogger("chardet.charsetprober").setLevel(logging.ERROR)
 logging.getLogger("requests").setLevel(logging.ERROR)
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -69,15 +79,20 @@ class TwitchChannelPointsMiner:
         enable_analytics: bool = False,
         disable_ssl_cert_verification: bool = False,
         disable_at_in_nickname: bool = False,
+        # Settings for logging and selenium as you can see.
         priority: list = [Priority.STREAK, Priority.DROPS, Priority.ORDER],
+        # This settings will be global shared trought Settings class
         logger_settings: LoggerSettings = LoggerSettings(),
+        # Default values for all streamers
         streamer_settings: StreamerSettings = StreamerSettings(),
     ):
+        # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
             logger.error("Please edit your runner file (usually run.py) and try again.")
             logger.error("No username, exiting...")
             sys.exit(0)
 
+        # This disables certificate verification and allows the connection to proceed, but also makes it vulnerable to man-in-the-middle (MITM) attacks.
         Settings.disable_ssl_cert_verification = disable_ssl_cert_verification
 
         Settings.disable_at_in_nickname = disable_at_in_nickname
@@ -86,12 +101,14 @@ class TwitchChannelPointsMiner:
 
         def is_connected():
             try:
+                # resolve the IP address of the Twitch.tv domain name
                 socket.gethostbyname("twitch.tv")
                 return True
             except OSError:
                 pass
             return False
 
+        # check for Twitch.tv connectivity every 5 seconds
         error_printed = False
         while not is_connected():
             if not error_printed:
@@ -99,6 +116,7 @@ class TwitchChannelPointsMiner:
                 error_printed = True
             time.sleep(5)
 
+        # Analytics switch
         Settings.enable_analytics = enable_analytics
 
         if enable_analytics is True:
@@ -109,12 +127,15 @@ class TwitchChannelPointsMiner:
 
         self.username = username
 
+        # Set as global config
         Settings.logger = logger_settings
 
+        # Init as default all the missing values
         streamer_settings.default()
         streamer_settings.bet.default()
         Settings.streamer_settings = streamer_settings
 
+        # user_agent = get_user_agent("FIREFOX")
         user_agent = get_user_agent("CHROME")
         self.twitch = Twitch(self.username, user_agent, password)
 
@@ -136,6 +157,7 @@ class TwitchChannelPointsMiner:
             self.username, logger_settings
         )
 
+        # Check for the latest version of the script
         current_version, github_version = check_versions()
 
         logger.info(
@@ -161,6 +183,7 @@ class TwitchChannelPointsMiner:
         refresh: int = 5,
         days_ago: int = 7,
     ):
+        # Analytics switch
         if Settings.enable_analytics is True:
             from TwitchChannelPointsMiner.classes.AnalyticsServer import AnalyticsServer
 
@@ -219,10 +242,7 @@ class TwitchChannelPointsMiner:
                 )
                 if username not in blacklist:
                     streamers_name.append(username)
-                    streamers_dict[username] = {
-                        "value": streamer,
-                        "explicitly_configured": isinstance(streamer, Streamer),
-                    }
+                    streamers_dict[username] = streamer
 
             if followers is True:
                 followers_array = self.twitch.get_followers(order=followers_order)
@@ -233,10 +253,7 @@ class TwitchChannelPointsMiner:
                 for username in followers_array:
                     if username not in streamers_dict and username not in blacklist:
                         streamers_name.append(username)
-                        streamers_dict[username] = {
-                            "value": username.lower().strip(),
-                            "explicitly_configured": False,
-                        }
+                        streamers_dict[username] = username.lower().strip()
 
             logger.info(
                 f"Loading data for {len(streamers_name)} streamers. Please wait...",
@@ -246,18 +263,11 @@ class TwitchChannelPointsMiner:
                 if username in streamers_name:
                     time.sleep(random.uniform(0.3, 0.7))
                     try:
-                        streamer_entry = streamers_dict[username]
-                        streamer_value = streamer_entry["value"]
-                        explicitly_configured = streamer_entry["explicitly_configured"]
                         streamer = (
-                            streamer_value
-                            if isinstance(streamer_value, Streamer) is True
-                            else Streamer(
-                                username,
-                                explicitly_configured=explicitly_configured,
-                            )
+                            streamers_dict[username]
+                            if isinstance(streamers_dict[username], Streamer) is True
+                            else Streamer(username)
                         )
-                        streamer.explicitly_configured = explicitly_configured
                         streamer.channel_id = self.twitch.get_channel_id(username)
                         streamer.settings = set_default_settings(
                             streamer.settings, Settings.streamer_settings
@@ -278,11 +288,16 @@ class TwitchChannelPointsMiner:
                             extra={"emoji": ":cry:"},
                         )
 
+            # Populate the streamers with default values.
+            # 1. Load channel points and auto-claim bonus
+            # 2. Check if streamers are online
+            # 3. DEACTIVATED: Check if the user is a moderator. (was used before the 5th of April 2021 to deactivate predictions)
             for streamer in self.streamers:
                 time.sleep(random.uniform(0.3, 0.7))
                 try:
                     self.twitch.load_channel_points_context(streamer)
                     self.twitch.check_streamer_online(streamer)
+                    # self.twitch.viewer_is_mod(streamer)
                 except StreamerDoesNotExistException:
                     logger.info(
                         f"Streamer {streamer.username} does not exist",
@@ -293,10 +308,13 @@ class TwitchChannelPointsMiner:
                 streamer.channel_points for streamer in self.streamers
             ]
 
+            # If we have at least one streamer with settings = make_predictions True
             make_predictions = at_least_one_value_in_settings_is(
                 self.streamers, "make_predictions", True
             )
 
+            # If we have at least one streamer with settings = claim_drops True
+            # Spawn a thread for sync inventory and dashboard
             if (
                 at_least_one_value_in_settings_is(self.streamers, "claim_drops", True)
                 is True
@@ -322,8 +340,11 @@ class TwitchChannelPointsMiner:
                 events_predictions=self.events_predictions,
             )
 
+            # Subscribe to community-points-user. Get update for points spent or gains
             user_id = self.twitch.twitch_login.get_user_id()
+            # print(f"!!!!!!!!!!!!!! USER_ID: {user_id}")
 
+            # Fixes 'ERR_BADAUTH'
             if not user_id:
                 logger.error("No user_id, exiting...")
                 self.end(0, 0)
@@ -335,6 +356,7 @@ class TwitchChannelPointsMiner:
                 )
             )
 
+            # Going to subscribe to predictions-user-v1. Get update when we place a new prediction (confirm)
             if make_predictions is True:
                 self.ws_pool.submit(
                     PubsubTopic(
@@ -369,6 +391,8 @@ class TwitchChannelPointsMiner:
             refresh_context = time.time()
             while self.running:
                 time.sleep(random.uniform(20, 60))
+                # Do an external control for WebSocket. Check if the thread is running
+                # Check if is not None because maybe we have already created a new connection on array+1 and now index is None
                 for index in range(0, len(self.ws_pool.ws)):
                     if (
                         self.ws_pool.ws[index].is_reconnecting is False
@@ -413,6 +437,8 @@ class TwitchChannelPointsMiner:
         if self.sync_campaigns_thread is not None:
             self.sync_campaigns_thread.join()
 
+        # Check if all the mutex are unlocked.
+        # Prevent breaks of .json file
         for streamer in self.streamers:
             if streamer.mutex.locked():
                 streamer.mutex.acquire()
@@ -420,6 +446,7 @@ class TwitchChannelPointsMiner:
 
         self.__print_report()
 
+        # Stop the queue listener to make sure all messages have been logged
         self.queue_listener.stop()
 
         sys.exit(0)

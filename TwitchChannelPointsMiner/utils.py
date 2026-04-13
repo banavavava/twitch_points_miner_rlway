@@ -132,30 +132,12 @@ def copy_values_if_none(settings, defaults):
     return settings
 
 
-def _safe_clone_defaults(defaults):
-    clone = defaults.__class__()
-    values = list(
-        filter(
-            lambda x: x.startswith("__") is False
-            and callable(getattr(defaults, x)) is False,
-            dir(defaults),
-        )
-    )
-    for value in values:
-        source = getattr(defaults, value)
-        if value == "ai_analyzer":
-            setattr(clone, value, source)
-            continue
-        try:
-            setattr(clone, value, deepcopy(source))
-        except Exception:
-            setattr(clone, value, source)
-    return clone
-
-
 def set_default_settings(settings, defaults):
+    # If no settings was provided use the default settings ...
+    # If settings was provided but maybe are only partial set
+    # Get the default values from Settings.streamer_settings
     return (
-        _safe_clone_defaults(defaults)
+        deepcopy(defaults)
         if settings is None
         else copy_values_if_none(settings, defaults)
     )

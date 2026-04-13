@@ -11,6 +11,3 @@ irc
 pandas
 pytz
 validators
-anthropic
-httpx
-python-dotenv

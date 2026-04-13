@@ -697,13 +697,8 @@ class Twitch(object):
                 self.contribute_to_community_goals(streamer)
 
     def make_predictions(self, event):
-        event.bet.analyze_with_ai(
-            prediction_title=event.title,
-            streamer_name=event.streamer.username,
-            game_name=event.streamer.stream.game_name() or "",
-            can_use_ai=event.streamer.explicitly_configured,
-        )
         decision = event.bet.calculate(event.streamer.channel_points)
+        # selector_index = 0 if decision["choice"] == "A" else 1
 
         logger.info(
             f"Going to complete bet for {event}",
@@ -713,16 +708,6 @@ class Twitch(object):
             },
         )
         if event.status == "ACTIVE":
-            if decision["choice"] is None:
-                logger.info(
-                    f"Skip betting for the event {event} because no valid decision was produced",
-                    extra={
-                        "emoji": ":pushpin:",
-                        "event": Events.BET_FILTERS,
-                    },
-                )
-                return
-
             skip, compared_value = event.bet.skip()
             if skip is True:
                 logger.info(
@@ -742,6 +727,7 @@ class Twitch(object):
             else:
                 if decision["amount"] >= 10:
                     logger.info(
+                        # f"Place {_millify(decision['amount'])} channel points on: {event.bet.get_outcome(selector_index)}",
                         f"Place {_millify(decision['amount'])} channel points on: {event.bet.get_outcome(decision['choice'])}",
                         extra={
                             "emoji": ":four_leaf_clover:",

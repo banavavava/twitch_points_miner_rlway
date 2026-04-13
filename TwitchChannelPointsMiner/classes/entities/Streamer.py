@@ -72,7 +72,6 @@ class Streamer(object):
     __slots__ = [
         "username",
         "channel_id",
-        "explicitly_configured",
         "settings",
         "is_online",
         "stream_up",
@@ -91,10 +90,9 @@ class Streamer(object):
         "mutex",
     ]
 
-    def __init__(self, username, settings=None, explicitly_configured=True):
+    def __init__(self, username, settings=None):
         self.username: str = username.lower().strip()
         self.channel_id: str = ""
-        self.explicitly_configured = explicitly_configured
         self.settings = settings
         self.is_online = False
         self.stream_up = 0
@@ -182,6 +180,7 @@ class Streamer(object):
         return (
             self.settings.claim_drops is True
             and self.is_online is True
+            # and self.stream.drops_tags is True
             and self.stream.campaigns_ids != []
         )
 
@@ -206,20 +205,18 @@ class Streamer(object):
         if delay_mode == DelayMode.FROM_START:
             return min(delay, prediction_window_seconds)
         elif delay_mode == DelayMode.FROM_END:
-            delay += self.settings.bet.get_ai_delay_seconds(
-                can_use_ai=self.explicitly_configured
-            )
             return max(prediction_window_seconds - delay, 0)
         elif delay_mode == DelayMode.PERCENTAGE:
             return prediction_window_seconds * delay
         else:
             return prediction_window_seconds
 
+    # === ANALYTICS === #
     def persistent_annotations(self, event_type, event_text):
         event_type = event_type.upper()
         if event_type in ["WATCH_STREAK", "WIN", "PREDICTION_MADE", "LOSE"]:
             primary_color = (
-                "#45c1ff"
+                "#45c1ff"  # blue #45c1ff yellow #ffe045 green #36b535 red #ff4545
                 if event_type == "WATCH_STREAK"
                 else (
                     "#ffe045"
@@ -240,6 +237,7 @@ class Streamer(object):
         self.__save_json("series", event_type=event_type)
 
     def __save_json(self, key, data={}, event_type="Watch"):
+        # https://stackoverflow.com/questions/4676195/why-do-i-need-to-multiply-unix-timestamps-by-1000-in-javascript
         now = datetime.now().replace(microsecond=0)
         data.update({"x": round(datetime.timestamp(now) * 1000)})
 
@@ -249,9 +247,10 @@ class Streamer(object):
                 data.update({"z": event_type.replace("_", " ").title()})
 
         fname = os.path.join(Settings.analytics_path, f"{self.username}.json")
-        temp_fname = fname + ".temp"
+        temp_fname = fname + ".temp"  # Temporary file name
 
         with self.mutex:
+            # Create and write to the temporary file
             with open(temp_fname, "w") as temp_file:
                 json_data = json.load(open(fname, "r")) if os.path.isfile(fname) else {}
                 if key not in json_data:
@@ -259,11 +258,15 @@ class Streamer(object):
                 json_data[key].append(data)
                 json.dump(json_data, temp_file, indent=4)
 
+            # Replace the original file with the temporary file
             os.replace(temp_fname, fname)
 
     def leave_chat(self):
         if self.irc_chat is not None:
             self.irc_chat.stop()
+
+            # Recreate a new thread to start again
+            # raise RuntimeError("threads can only be started once")
             self.irc_chat = ThreadChat(
                 self.irc_chat.username,
                 self.irc_chat.token,

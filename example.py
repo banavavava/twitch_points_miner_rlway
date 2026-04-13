@@ -1,34 +1,23 @@
+# -*- coding: utf-8 -*-
+
 import logging
-import os
-
 from colorama import Fore
-from dotenv import load_dotenv
-
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
+from TwitchChannelPointsMiner.logger import LoggerSettings, ColorPalette
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.Discord import Discord
-from TwitchChannelPointsMiner.classes.Gotify import Gotify
-from TwitchChannelPointsMiner.classes.Pushover import Pushover
-from TwitchChannelPointsMiner.classes.Settings import Events, FollowersOrder, Priority
-from TwitchChannelPointsMiner.classes.Telegram import Telegram
 from TwitchChannelPointsMiner.classes.Webhook import Webhook
-from TwitchChannelPointsMiner.classes.entities.Bet import (
-    Condition,
-    BetSettings,
-    DelayMode,
-    FilterCondition,
-    OutcomeKeys,
-    Strategy,
-)
+from TwitchChannelPointsMiner.classes.Telegram import Telegram
+from TwitchChannelPointsMiner.classes.Pushover import Pushover
+from TwitchChannelPointsMiner.classes.Gotify import Gotify
+from TwitchChannelPointsMiner.classes.Settings import Priority, Events, FollowersOrder
+from TwitchChannelPointsMiner.classes.entities.Bet import Strategy, BetSettings, Condition, OutcomeKeys, FilterCondition, DelayMode
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
-from TwitchChannelPointsMiner.logger import ColorPalette, LoggerSettings
 
-load_dotenv()
-
-
+# Инициализация Twitch Channel Points Miner
 twitch_miner = TwitchChannelPointsMiner(
-    username=os.getenv("TWITCH_USERNAME", "mliness"),
-    password=os.getenv("TWITCH_PASSWORD", "NowBanip3."),
+    username="mliness",
+    password="NowBanip3.",  # Можно оставить пустым, тогда бот спросит при запуске
     claim_drops_startup=False,
     priority=[Priority.STREAK, Priority.DROPS, Priority.ORDER],
     enable_analytics=False,
@@ -47,37 +36,22 @@ twitch_miner = TwitchChannelPointsMiner(
         color_palette=ColorPalette(
             STREAMER_online="GREEN",
             streamer_offline="red",
-            BET_wiN=Fore.MAGENTA,
+            BET_wiN=Fore.MAGENTA
         ),
         telegram=Telegram(
             chat_id=123456789,
-            token="123456789:telegram-token",
-            events=[
-                Events.STREAMER_ONLINE,
-                Events.STREAMER_OFFLINE,
-                Events.BET_LOSE,
-                Events.CHAT_MENTION,
-            ],
+            token="123456789:shfuihreuifheuifhiu34578347",
+            events=[Events.STREAMER_ONLINE, Events.STREAMER_OFFLINE, Events.BET_LOSE, Events.CHAT_MENTION],
             disable_notification=True,
         ),
         discord=Discord(
-            webhook_api="https://discord.com/api/webhooks/your/webhook",
-            events=[
-                Events.STREAMER_ONLINE,
-                Events.STREAMER_OFFLINE,
-                Events.BET_LOSE,
-                Events.CHAT_MENTION,
-            ],
+            webhook_api="https://discord.com/api/webhooks/0123456789/0a1B2c3D4e5F6g7H8i9J",
+            events=[Events.STREAMER_ONLINE, Events.STREAMER_OFFLINE, Events.BET_LOSE, Events.CHAT_MENTION],
         ),
         webhook=Webhook(
             endpoint="https://example.com/webhook",
             method="GET",
-            events=[
-                Events.STREAMER_ONLINE,
-                Events.STREAMER_OFFLINE,
-                Events.BET_LOSE,
-                Events.CHAT_MENTION,
-            ],
+            events=[Events.STREAMER_ONLINE, Events.STREAMER_OFFLINE, Events.BET_LOSE, Events.CHAT_MENTION],
         ),
         pushover=Pushover(
             userkey="YOUR-ACCOUNT-TOKEN",
@@ -89,13 +63,8 @@ twitch_miner = TwitchChannelPointsMiner(
         gotify=Gotify(
             endpoint="https://example.com/message?token=TOKEN",
             priority=8,
-            events=[
-                Events.STREAMER_ONLINE,
-                Events.STREAMER_OFFLINE,
-                Events.BET_LOSE,
-                Events.CHAT_MENTION,
-            ],
-        ),
+            events=[Events.STREAMER_ONLINE, Events.STREAMER_OFFLINE, Events.BET_LOSE, Events.CHAT_MENTION],
+        )
     ),
     streamer_settings=StreamerSettings(
         make_predictions=True,
@@ -107,34 +76,22 @@ twitch_miner = TwitchChannelPointsMiner(
         chat=ChatPresence.ONLINE,
         bet=BetSettings(
             strategy=Strategy.SMART,
-            percentage=8,
-            percentage_gap=18,
-            max_points=35000,
-            stealth_mode=False,
+            percentage=5,
+            percentage_gap=30,      # Увеличена разница между исходами
+            max_points=30000,       # Снижен максимальный риск
+            stealth_mode=True,
             delay_mode=DelayMode.FROM_END,
-            delay=4,
-            minimum_points=10000,
+            delay=4,                # Ставка за 4 секунды до конца таймера
+            minimum_points=10000,   # Минимальное количество очков для ставки
             filter_condition=[
-                FilterCondition(
-                    by=OutcomeKeys.USERS_GAP_PERCENTAGE,
-                    where=Condition.GTE,
-                    value=8,
-                ),
-                FilterCondition(
-                    by=OutcomeKeys.POINTS_GAP_PERCENTAGE,
-                    where=Condition.GTE,
-                    value=12,
-                ),
-            ],
-            uncertain_percentage=2,
-            uncertain_odds_min=45.0,
-            uncertain_odds_max=55.0,
-            uncertain_max_points=5000,
-        ),
-    ),
+                FilterCondition(by=OutcomeKeys.TOTAL_USERS, where=Condition.LTE, value=800),
+                FilterCondition(by=OutcomeKeys.ODDS_PERCENTAGE, where=Condition.GTE, value=60)
+            ]
+        )
+    )
 )
 
-
+# Настройка стримеров
 twitch_miner.mine(
     [
         Streamer(
@@ -148,25 +105,18 @@ twitch_miner.mine(
                 bet=BetSettings(
                     strategy=Strategy.SMART,
                     percentage=24,
-                    percentage_gap=23,
+                    percentage_gap=30,
                     max_points=55000,
-                    stealth_mode=False,
+                    stealth_mode=True,
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
                     minimum_points=10000,
                     filter_condition=[
-                        FilterCondition(
-                            by=OutcomeKeys.ODDS_PERCENTAGE,
-                            where=Condition.GTE,
-                            value=60,
-                        ),
-                    ],
-                    uncertain_percentage=10,
-                    uncertain_odds_min=41.0,
-                    uncertain_odds_max=59.0,
-                    uncertain_max_points=10000,
-                ),
-            ),
+                        FilterCondition(by=OutcomeKeys.TOTAL_USERS, where=Condition.LTE, value=800),
+                        FilterCondition(by=OutcomeKeys.ODDS_PERCENTAGE, where=Condition.GTE, value=60)
+                    ]
+                )
+            )
         ),
         Streamer(
             "sasavot",
@@ -179,27 +129,20 @@ twitch_miner.mine(
                 bet=BetSettings(
                     strategy=Strategy.SMART,
                     percentage=24,
-                    percentage_gap=23,
-                    max_points=55000,
-                    stealth_mode=False,
+                    percentage_gap=30,
+                    max_points=100000,
+                    stealth_mode=True,
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
                     minimum_points=10000,
                     filter_condition=[
-                        FilterCondition(
-                            by=OutcomeKeys.ODDS_PERCENTAGE,
-                            where=Condition.GTE,
-                            value=60,
-                        ),
-                    ],
-                    uncertain_percentage=10,
-                    uncertain_odds_min=41.0,
-                    uncertain_odds_max=59.0,
-                    uncertain_max_points=10000,
-                ),
-            ),
+                        FilterCondition(by=OutcomeKeys.TOTAL_USERS, where=Condition.LTE, value=800),
+                        FilterCondition(by=OutcomeKeys.ODDS_PERCENTAGE, where=Condition.GTE, value=60)
+                    ]
+                )
+            )
         ),
     ],
     followers=True,
-    followers_order=FollowersOrder.ASC,
+    followers_order=FollowersOrder.ASC
 )

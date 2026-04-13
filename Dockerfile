@@ -10,8 +10,8 @@ ENV CRYPTOGRAPHY_DONT_BUILD_RUST=1
 
 RUN pip install --upgrade pip
 
-RUN apt-get update
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --fix-missing --no-install-recommends \
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends \
     gcc \
     libffi-dev \
     rustc \
@@ -39,7 +39,6 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --fix-missing --no-ins
   && rm -rf /var/lib/apt/lists/* \
   && rm -rf /usr/share/doc/*
 
-ADD ./TwitchChannelPointsMiner ./TwitchChannelPointsMiner
-ADD ./example.py ./example.py
+COPY . .
 
 ENTRYPOINT ["python", "example.py"]
