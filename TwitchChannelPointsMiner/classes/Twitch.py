@@ -740,6 +740,19 @@ class Twitch(object):
                         "event": Events.BET_FILTERS,
                     },
                 )
+                if event.bet.get_decision_explanation():
+                    logger.info(
+                        f"Bet explanation before skip: {event.bet.get_decision_explanation()}",
+                        extra={
+                            "emoji": ":mag:",
+                            "event": Events.BET_FILTERS,
+                            "skip_telegram": True,
+                            "skip_discord": True,
+                            "skip_webhook": True,
+                            "skip_matrix": True,
+                            "skip_gotify": True,
+                        },
+                    )
             else:
                 if decision["amount"] >= 10:
                     logger.info(

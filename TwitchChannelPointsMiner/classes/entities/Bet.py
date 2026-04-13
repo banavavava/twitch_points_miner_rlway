@@ -45,6 +45,11 @@ class OutcomeKeys(object):
     TOTAL_POINTS = "total_points"
     DECISION_USERS = "decision_users"
     DECISION_POINTS = "decision_points"
+    USERS_GAP = "users_gap"
+    USERS_GAP_PERCENTAGE = "users_gap_percentage"
+    POINTS_GAP = "points_gap"
+    POINTS_GAP_PERCENTAGE = "points_gap_percentage"
+    CONFIDENCE = "confidence"
 
 
 class DelayMode(Enum):
@@ -172,6 +177,8 @@ class Bet(object):
         "settings",
         "_ai_result",
         "_decision_explanation",
+        "_confidence",
+        "_confidence_details",
     ]
 
     def __init__(self, outcomes: list, settings: BetSettings):
@@ -183,6 +190,8 @@ class Bet(object):
         self.settings = settings
         self._ai_result = None
         self._decision_explanation = ""
+        self._confidence = 0.0
+        self._confidence_details = {}
 
     def update_outcomes(self, outcomes):
         for index in range(0, len(self.outcomes)):
@@ -224,17 +233,6 @@ class Bet(object):
                 )
 
         self.__clear_outcomes()
-
-    def analyze_with_ai(
-        self,
-        prediction_title: str = "",
-        streamer_name: str = "",
-        game_name: str = "",
-        stream_title: str = "",
-        can_use_ai: bool = True,
-    ) -> bool:
-        self._ai_result = None
-        return False
 
     def __repr__(self):
         return (
@@ -305,6 +303,16 @@ class Bet(object):
             return filter_condition
         return [filter_condition]
 
+    def __get_gap_value(self, first, second):
+        return abs(first - second)
+
+    def __get_gap_percentage(self, first, second):
+        total = first + second
+        return float_round(0 if total == 0 else (100 * abs(first - second)) / total)
+
+    def __get_confidence(self):
+        return self._confidence
+
     def __get_compared_value(self, key):
         fixed_key = (
             key
@@ -313,6 +321,41 @@ class Bet(object):
         )
         if key in [OutcomeKeys.TOTAL_USERS, OutcomeKeys.TOTAL_POINTS]:
             return sum(outcome[fixed_key] for outcome in self.outcomes)
+
+        if key == OutcomeKeys.USERS_GAP:
+            if len(self.outcomes) < 2:
+                return 0
+            return self.__get_gap_value(
+                self.outcomes[0][OutcomeKeys.TOTAL_USERS],
+                self.outcomes[1][OutcomeKeys.TOTAL_USERS],
+            )
+
+        if key == OutcomeKeys.USERS_GAP_PERCENTAGE:
+            if len(self.outcomes) < 2:
+                return 0
+            return self.__get_gap_percentage(
+                self.outcomes[0][OutcomeKeys.TOTAL_USERS],
+                self.outcomes[1][OutcomeKeys.TOTAL_USERS],
+            )
+
+        if key == OutcomeKeys.POINTS_GAP:
+            if len(self.outcomes) < 2:
+                return 0
+            return self.__get_gap_value(
+                self.outcomes[0][OutcomeKeys.TOTAL_POINTS],
+                self.outcomes[1][OutcomeKeys.TOTAL_POINTS],
+            )
+
+        if key == OutcomeKeys.POINTS_GAP_PERCENTAGE:
+            if len(self.outcomes) < 2:
+                return 0
+            return self.__get_gap_percentage(
+                self.outcomes[0][OutcomeKeys.TOTAL_POINTS],
+                self.outcomes[1][OutcomeKeys.TOTAL_POINTS],
+            )
+
+        if key == OutcomeKeys.CONFIDENCE:
+            return self.__get_confidence()
 
         outcome_index = self.decision["choice"]
         return self.outcomes[outcome_index][fixed_key]
@@ -365,12 +408,50 @@ class Bet(object):
         else:
             return False, 0
 
+    def __calculate_confidence(self, choice_index: int):
+        if choice_index is None or len(self.outcomes) < 2:
+            self._confidence = 0.0
+            self._confidence_details = {}
+            return self._confidence
+
+        selected = self.outcomes[choice_index]
+        opponent = self.outcomes[1 - choice_index]
+
+        users_gap_pct = self.__get_gap_percentage(
+            selected[OutcomeKeys.TOTAL_USERS],
+            opponent[OutcomeKeys.TOTAL_USERS],
+        )
+        points_gap_pct = self.__get_gap_percentage(
+            selected[OutcomeKeys.TOTAL_POINTS],
+            opponent[OutcomeKeys.TOTAL_POINTS],
+        )
+        odds_edge = max(
+            0.0,
+            float_round(
+                selected[OutcomeKeys.ODDS_PERCENTAGE] - opponent[OutcomeKeys.ODDS_PERCENTAGE]
+            ),
+        )
+
+        confidence = float_round(
+            (users_gap_pct * 0.45) + (points_gap_pct * 0.35) + (odds_edge * 0.20)
+        )
+
+        self._confidence = confidence
+        self._confidence_details = {
+            "users_gap_percentage": users_gap_pct,
+            "points_gap_percentage": points_gap_pct,
+            "odds_edge": odds_edge,
+        }
+        return self._confidence
+
     def get_decision_explanation(self) -> str:
         return self._decision_explanation
 
     def calculate(self, balance: int) -> dict:
         self.decision = {"choice": None, "amount": 0, "id": None}
         self._decision_explanation = ""
+        self._confidence = 0.0
+        self._confidence_details = {}
 
         if self.decision["choice"] is None and self.settings.strategy == Strategy.MOST_VOTED:
             self.decision["choice"] = self.__return_choice(OutcomeKeys.TOTAL_USERS)
@@ -410,6 +491,7 @@ class Bet(object):
         if self.decision["choice"] is not None:
             index = self.decision["choice"]
             self.decision["id"] = self.outcomes[index]["id"]
+            confidence = self.__calculate_confidence(index)
 
             odds_pct = self.outcomes[index][OutcomeKeys.ODDS_PERCENTAGE]
 
@@ -417,27 +499,77 @@ class Bet(object):
             base_amount = 0
 
             if self.__is_uncertain_odds(odds_pct):
-                raw_amount = int(balance * (self.settings.uncertain_percentage / 100))
+                confidence_multiplier = (
+                    0.8
+                    if confidence < 10
+                    else 1.0
+                    if confidence < 17
+                    else 1.3
+                    if confidence < 24
+                    else 1.6
+                )
+                aggressive_uncertain_pct = self.settings.uncertain_percentage * confidence_multiplier
+                raw_amount = int(balance * (aggressive_uncertain_pct / 100))
                 base_amount = min(raw_amount, self.settings.uncertain_max_points)
                 self.decision["amount"] = base_amount
                 amount_reasons.append(
-                    f"uncertain odds zone {odds_pct}% -> cautious mode {self.settings.uncertain_percentage}% of balance"
+                    f"uncertain odds zone {odds_pct}% -> adaptive aggressive mode {float_round(aggressive_uncertain_pct)}% of balance from base uncertain {self.settings.uncertain_percentage}%"
+                )
+                amount_reasons.append(
+                    f"confidence multiplier x{float_round(confidence_multiplier)} from confidence={confidence}%"
                 )
                 if base_amount != raw_amount:
                     amount_reasons.append(
                         f"capped by uncertain_max_points={self.settings.uncertain_max_points:,}"
                     )
             else:
-                raw_amount = int(balance * (self.settings.percentage / 100))
+                confidence_multiplier = (
+                    0.75
+                    if confidence < 8
+                    else 1.0
+                    if confidence < 14
+                    else 1.2
+                    if confidence < 20
+                    else 1.45
+                    if confidence < 28
+                    else 1.75
+                )
+                aggressive_pct = self.settings.percentage * confidence_multiplier
+                raw_amount = int(balance * (aggressive_pct / 100))
                 base_amount = min(raw_amount, self.settings.max_points)
                 self.decision["amount"] = base_amount
                 amount_reasons.append(
-                    f"base stake {self.settings.percentage}% of balance {balance:,} -> {raw_amount:,}"
+                    f"base stake scaled by confidence: {self.settings.percentage}% -> {float_round(aggressive_pct)}% of balance {balance:,} -> {raw_amount:,}"
+                )
+                amount_reasons.append(
+                    f"confidence multiplier x{float_round(confidence_multiplier)} from confidence={confidence}%"
                 )
                 if base_amount != raw_amount:
                     amount_reasons.append(
                         f"capped by max_points={self.settings.max_points:,}"
                     )
+
+            if confidence < 6:
+                self.decision["amount"] = min(self.decision["amount"], 20)
+                amount_reasons.append(
+                    "very low confidence safety clamp applied"
+                )
+            elif confidence < 10:
+                self.decision["amount"] = int(self.decision["amount"] * 0.5)
+                amount_reasons.append(
+                    "low confidence stake cut by 50%"
+                )
+            elif confidence >= 25:
+                boosted_amount = int(self.decision["amount"] * 1.15)
+                max_cap = (
+                    self.settings.uncertain_max_points
+                    if self.__is_uncertain_odds(odds_pct)
+                    else self.settings.max_points
+                )
+                self.decision["amount"] = min(boosted_amount, max_cap)
+                amount_reasons.append(
+                    "elite confidence bonus +15%"
+                )
 
             if (
                 self.settings.stealth_mode is True
@@ -462,8 +594,14 @@ class Bet(object):
                 f"odds {selected_outcome[OutcomeKeys.ODDS]}"
             )
             strategy_summary = f"selection source: {self.settings.strategy}"
+            confidence_summary = (
+                f"confidence {confidence}% "
+                f"(users gap {self._confidence_details['users_gap_percentage']}%, "
+                f"points gap {self._confidence_details['points_gap_percentage']}%, "
+                f"odds edge {self._confidence_details['odds_edge']}%)"
+            )
             self._decision_explanation = (
-                f"{strategy_summary}. {market_summary}. "
+                f"{strategy_summary}. {market_summary}. {confidence_summary}. "
                 f"Stake sizing: {'; '.join(amount_reasons)}."
             )
 
