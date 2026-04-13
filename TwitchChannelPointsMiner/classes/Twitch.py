@@ -697,13 +697,14 @@ class Twitch(object):
                 self.contribute_to_community_goals(streamer)
 
     def make_predictions(self, event):
-        event.bet.analyze_with_ai(
-            prediction_title=event.title,
-            streamer_name=event.streamer.username,
-            game_name=event.streamer.stream.game_display_name() or "",
-            stream_title=event.streamer.stream.title or "",
-            can_use_ai=event.streamer.explicitly_configured,
-        )
+        # AI analysis disabled.
+        # event.bet.analyze_with_ai(
+        #     prediction_title=event.title,
+        #     streamer_name=event.streamer.username,
+        #     game_name=event.streamer.stream.game_display_name() or "",
+        #     stream_title=event.streamer.stream.title or "",
+        #     can_use_ai=event.streamer.explicitly_configured,
+        # )
         decision = event.bet.calculate(event.streamer.channel_points)
 
         logger.info(

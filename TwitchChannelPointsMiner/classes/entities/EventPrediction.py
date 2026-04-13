@@ -64,11 +64,10 @@ class EventPrediction(object):
 
     def parse_result(self, result) -> dict:
         result_type = result["type"]
+        decision = self.bet.decision if isinstance(self.bet.decision, dict) else {}
 
         points = {}
-        points["placed"] = (
-            self.bet.decision["amount"] if result_type != "REFUND" else 0
-        )
+        points["placed"] = decision.get("amount", 0) if result_type != "REFUND" else 0
         points["won"] = (
             result["points_won"]
             if result["points_won"] or result_type == "REFUND"

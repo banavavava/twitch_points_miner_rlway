@@ -165,7 +165,12 @@ class BetSettings(object):
         )
 
     def get_ai_delay_seconds(self, can_use_ai: bool = True) -> float:
-        return 0
+        if can_use_ai is not True or self.ai_analyzer is None:
+            return 0
+        try:
+            return float(getattr(self.ai_analyzer.settings, "timeout", 0) or 0)
+        except Exception:
+            return 0
 
 
 class Bet(object):
@@ -447,11 +452,75 @@ class Bet(object):
     def get_decision_explanation(self) -> str:
         return self._decision_explanation
 
+    def analyze_with_ai(
+        self,
+        prediction_title="",
+        streamer_name="",
+        game_name="",
+        stream_title="",
+        can_use_ai: bool = True,
+    ):
+        self._ai_result = None
+
+        if can_use_ai is not True or self.settings.ai_analyzer is None:
+            return None
+
+        outcome_details = []
+        outcome_titles = []
+        for index, outcome in enumerate(self.outcomes):
+            outcome_details.append(
+                {
+                    "i": index,
+                    "title": outcome.get("title", f"Outcome {index}"),
+                    "percentage_users": outcome.get(OutcomeKeys.PERCENTAGE_USERS, 0),
+                    "total_points": outcome.get(OutcomeKeys.TOTAL_POINTS, 0),
+                    "odds": outcome.get(OutcomeKeys.ODDS, 0),
+                    "odds_percentage": outcome.get(OutcomeKeys.ODDS_PERCENTAGE, 0),
+                    "top_points": outcome.get(OutcomeKeys.TOP_POINTS, 0),
+                }
+            )
+            outcome_titles.append(outcome_details[-1]["title"])
+
+        try:
+            self._ai_result = self.settings.ai_analyzer.analyze(
+                outcome_details=outcome_details,
+                outcome_titles=outcome_titles,
+                streamer=self.settings.ai_streamer_name or streamer_name,
+                game=self.settings.ai_game_name or game_name,
+                prediction_title=prediction_title,
+                stream_title=stream_title,
+            )
+        except Exception as exc:
+            self._ai_result = None
+            self._decision_explanation = f"AI analysis unavailable: {exc}"
+
+        return self._ai_result
+
     def calculate(self, balance: int) -> dict:
         self.decision = {"choice": None, "amount": 0, "id": None}
         self._decision_explanation = ""
         self._confidence = 0.0
         self._confidence_details = {}
+
+        if self._ai_result is not None:
+            min_confidence = float(
+                getattr(getattr(self.settings.ai_analyzer, "settings", None), "min_confidence", 0)
+                or 0
+            )
+            reasoning = getattr(self._ai_result, "reasoning", "")
+            ai_confidence = float_round(float(getattr(self._ai_result, "confidence", 0.0)) * 100)
+
+            if self._ai_result.should_skip(min_confidence):
+                self._decision_explanation = (
+                    f"AI skipped this market: confidence {ai_confidence}% below minimum "
+                    f"{float_round(min_confidence * 100)}%."
+                    + (f" Reasoning: {reasoning}" if reasoning else "")
+                )
+                return self.decision
+
+            preferred_outcome = int(getattr(self._ai_result, "preferred_outcome", 0))
+            if 0 <= preferred_outcome < len(self.outcomes):
+                self.decision["choice"] = preferred_outcome
 
         if self.decision["choice"] is None and self.settings.strategy == Strategy.MOST_VOTED:
             self.decision["choice"] = self.__return_choice(OutcomeKeys.TOTAL_USERS)
@@ -600,9 +669,20 @@ class Bet(object):
                 f"points gap {self._confidence_details['points_gap_percentage']}%, "
                 f"odds edge {self._confidence_details['odds_edge']}%)"
             )
-            self._decision_explanation = (
+            explanation = (
                 f"{strategy_summary}. {market_summary}. {confidence_summary}. "
                 f"Stake sizing: {'; '.join(amount_reasons)}."
             )
+            if self._ai_result is not None:
+                ai_reasoning = getattr(self._ai_result, "reasoning", "")
+                ai_confidence = float_round(float(getattr(self._ai_result, "confidence", 0.0)) * 100)
+                ai_summary = (
+                    f"AI preference: outcome {getattr(self._ai_result, 'preferred_outcome', index)} "
+                    f"at {ai_confidence}% confidence"
+                )
+                if ai_reasoning:
+                    ai_summary += f" ({ai_reasoning})"
+                explanation = f"{ai_summary}. {explanation}"
+            self._decision_explanation = explanation
 
         return self.decision
