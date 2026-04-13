@@ -700,7 +700,8 @@ class Twitch(object):
         event.bet.analyze_with_ai(
             prediction_title=event.title,
             streamer_name=event.streamer.username,
-            game_name=event.streamer.stream.game_name() or "",
+            game_name=event.streamer.stream.game_display_name() or "",
+            stream_title=event.streamer.stream.title or "",
             can_use_ai=event.streamer.explicitly_configured,
         )
         decision = event.bet.calculate(event.streamer.channel_points)

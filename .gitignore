@@ -145,7 +145,6 @@ run.py
 chromedriver*
 
 # Folders
-cookies/*
 logs/*
 screenshots/*
 htmls/*

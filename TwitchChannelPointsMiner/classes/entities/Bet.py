@@ -234,6 +234,7 @@ class Bet(object):
         prediction_title: str = "",
         streamer_name: str = "",
         game_name: str = "",
+        stream_title: str = "",
         can_use_ai: bool = True,
     ) -> bool:
         self._ai_result = None
@@ -250,6 +251,7 @@ class Bet(object):
             streamer=streamer_name or self.settings.ai_streamer_name,
             game=game_name or self.settings.ai_game_name,
             prediction_title=prediction_title,
+            stream_title=stream_title,
         )
         return self._ai_result is not None
 

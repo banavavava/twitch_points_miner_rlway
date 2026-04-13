@@ -67,6 +67,7 @@ class _AnalysisCache:
         streamer: str,
         game: str,
         prediction_title: str,
+        stream_title: str,
     ) -> str:
         payload = json.dumps(
             {
@@ -74,6 +75,7 @@ class _AnalysisCache:
                 "streamer": streamer,
                 "game": game,
                 "prediction_title": prediction_title,
+                "stream_title": stream_title,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -86,9 +88,10 @@ class _AnalysisCache:
         streamer: str,
         game: str,
         prediction_title: str,
+        stream_title: str,
         ttl: int,
     ) -> Optional[AIAnalysisResult]:
-        key = self._key(outcomes, streamer, game, prediction_title)
+        key = self._key(outcomes, streamer, game, prediction_title, stream_title)
         if key in self._store:
             result, ts = self._store[key]
             if time.time() - ts < ttl:
@@ -102,9 +105,10 @@ class _AnalysisCache:
         streamer: str,
         game: str,
         prediction_title: str,
+        stream_title: str,
         result: AIAnalysisResult,
     ):
-        key = self._key(outcomes, streamer, game, prediction_title)
+        key = self._key(outcomes, streamer, game, prediction_title, stream_title)
         self._store[key] = (result, time.time())
 
 
@@ -130,6 +134,9 @@ Your task is to use the prediction title, streamer name, current game, and outco
 
 What to consider:
 - If streamer name and current game are known, assess how strong the streamer is in that specific game or mode.
+- Parse the stream title carefully for live context such as smurf account, alt account, challenge run, rank, MMR, ELO, opponent nickname, duo/trio, custom lobby, subscriber games, off-role play, warmup, or tilt.
+- If the stream title hints at a specific opponent, team, account, or lobby, identify those entities and use web search to verify who they are and how difficult the matchup is.
+- Use the stream title as higher-priority real-time context than generic historical reputation when the two conflict.
 - If outcomes refer to a match, round, team, map, streak, challenge, or measurable stat, use that.
 - If web search is available, use current information about form, results, ranking, matchup, and current game.
 - If outcomes mainly depend on randomness, entertainment, chat trolling, or streamer mood, confidence should be low.
@@ -168,6 +175,7 @@ class AIBetAnalyzer:
         streamer: str = "",
         game: str = "",
         prediction_title: str = "",
+        stream_title: str = "",
     ) -> Optional[AIAnalysisResult]:
         if not self._client:
             logger.warning("[AIBetAnalyzer] Client is not initialized, skipping AI analysis")
@@ -176,7 +184,8 @@ class AIBetAnalyzer:
         logger.info(
             "[AIBetAnalyzer] Analysis requested | "
             f"streamer={streamer or '<empty>'} | game={game or '<empty>'} | "
-            f"title={prediction_title or '<empty>'} | outcomes={outcome_titles}"
+            f"prediction_title={prediction_title or '<empty>'} | "
+            f"stream_title={stream_title or '<empty>'} | outcomes={outcome_titles}"
         )
 
         cached = _cache.get(
@@ -184,6 +193,7 @@ class AIBetAnalyzer:
             streamer,
             game,
             prediction_title,
+            stream_title,
             self.settings.cache_ttl_seconds,
         )
         if cached:
@@ -204,11 +214,19 @@ class AIBetAnalyzer:
                     streamer,
                     game,
                     prediction_title,
+                    stream_title,
                 )
                 result = future.result(timeout=self.settings.timeout)
             elapsed = time.time() - started_at
             if result:
-                _cache.set(outcome_titles, streamer, game, prediction_title, result)
+                _cache.set(
+                    outcome_titles,
+                    streamer,
+                    game,
+                    prediction_title,
+                    stream_title,
+                    result,
+                )
                 logger.info(
                     f"[AIBetAnalyzer] Analysis completed in {elapsed:.2f}s | "
                     f"confidence={result.confidence:.2f} | preferred_outcome={result.preferred_outcome} | "
@@ -234,10 +252,13 @@ class AIBetAnalyzer:
         streamer: str,
         game: str,
         prediction_title: str,
+        stream_title: str,
     ) -> str:
         parts = []
         if prediction_title:
             parts.append(f"Prediction title: {prediction_title}")
+        if stream_title:
+            parts.append(f"Current stream title: {stream_title}")
         if streamer:
             parts.append(f"Streamer: {streamer}")
         if game:
@@ -251,10 +272,20 @@ class AIBetAnalyzer:
             "Evaluate the streamer in the current game if relevant, compare all outcome options, "
             "then return the best decision as preferred_outcome_index."
         )
+        if stream_title:
+            parts.append(
+                "Use the current stream title as real-time context. It may reveal smurf play, challenge runs, "
+                "ranked/unranked, custom lobbies, weak or strong opponents, subscriber games, or off-role play."
+            )
+            parts.append(
+                "Extract any opponent nickname, account name, rank/MMR clue, or matchup hint from the stream title. "
+                "If such clues exist, verify them with web search and factor the matchup strength into the decision."
+            )
 
         if self.settings.use_web_search:
             parts.append(
-                "Use web search when the prediction depends on real current performance, statistics, rankings, or matchup context."
+                "Use web search when the prediction depends on real current performance, statistics, rankings, matchup context, "
+                "opponent identity, account status, or claims from the stream title."
             )
 
         return "\n".join(parts)
@@ -265,9 +296,16 @@ class AIBetAnalyzer:
         streamer: str,
         game: str,
         prediction_title: str,
+        stream_title: str,
     ) -> Optional[AIAnalysisResult]:
         system = _SYSTEM_RU if self.settings.language == "ru" else _SYSTEM_EN
-        user_msg = self._build_prompt(outcome_titles, streamer, game, prediction_title)
+        user_msg = self._build_prompt(
+            outcome_titles,
+            streamer,
+            game,
+            prediction_title,
+            stream_title,
+        )
 
         logger.info(
             "[AIBetAnalyzer] Prepared prompt payload | "
