@@ -152,11 +152,15 @@ class AIBetAnalyzer:
 
             _patch_anthropic_httpx_wrapper(anthropic)
             self._client = anthropic.Anthropic(api_key=self.settings.api_key)
-            logger.info("[AIBetAnalyzer] Anthropic client initialized")
+            logger.info(
+                "[AIBetAnalyzer] Anthropic client initialized | "
+                f"model={self.settings.model} | timeout={self.settings.timeout}s | "
+                f"web_search={self.settings.use_web_search} | language={self.settings.language}"
+            )
         except ImportError:
             logger.error("[AIBetAnalyzer] Install dependency: pip install anthropic")
         except Exception as exc:
-            logger.error(f"[AIBetAnalyzer] Initialization error: {exc}")
+            logger.exception(f"[AIBetAnalyzer] Initialization error: {exc}")
 
     def analyze(
         self,
@@ -166,7 +170,14 @@ class AIBetAnalyzer:
         prediction_title: str = "",
     ) -> Optional[AIAnalysisResult]:
         if not self._client:
+            logger.warning("[AIBetAnalyzer] Client is not initialized, skipping AI analysis")
             return None
+
+        logger.info(
+            "[AIBetAnalyzer] Analysis requested | "
+            f"streamer={streamer or '<empty>'} | game={game or '<empty>'} | "
+            f"title={prediction_title or '<empty>'} | outcomes={outcome_titles}"
+        )
 
         cached = _cache.get(
             outcome_titles,
@@ -177,12 +188,15 @@ class AIBetAnalyzer:
         )
         if cached:
             logger.info(
-                f"[AIBetAnalyzer] cache hit confidence={cached.confidence:.2f} "
-                f"decision={cached.preferred_outcome}"
+                f"[AIBetAnalyzer] Cache hit | confidence={cached.confidence:.2f} "
+                f"| decision={cached.preferred_outcome} | cached_reasoning={cached.reasoning}"
             )
             return cached
 
+        logger.info("[AIBetAnalyzer] Cache miss, sending request to Anthropic")
+
         try:
+            started_at = time.time()
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(
                     self._call_api,
@@ -192,8 +206,18 @@ class AIBetAnalyzer:
                     prediction_title,
                 )
                 result = future.result(timeout=self.settings.timeout)
+            elapsed = time.time() - started_at
             if result:
                 _cache.set(outcome_titles, streamer, game, prediction_title, result)
+                logger.info(
+                    f"[AIBetAnalyzer] Analysis completed in {elapsed:.2f}s | "
+                    f"confidence={result.confidence:.2f} | preferred_outcome={result.preferred_outcome} | "
+                    f"used_search={result.used_search} | reasoning={result.reasoning}"
+                )
+            else:
+                logger.warning(
+                    f"[AIBetAnalyzer] Analysis returned no result after {elapsed:.2f}s"
+                )
             return result
         except TimeoutError:
             logger.warning(
@@ -201,7 +225,7 @@ class AIBetAnalyzer:
             )
             return None
         except Exception as exc:
-            logger.warning(f"[AIBetAnalyzer] Analysis error: {exc}")
+            logger.exception(f"[AIBetAnalyzer] Analysis error: {exc}")
             return None
 
     def _build_prompt(
@@ -245,6 +269,12 @@ class AIBetAnalyzer:
         system = _SYSTEM_RU if self.settings.language == "ru" else _SYSTEM_EN
         user_msg = self._build_prompt(outcome_titles, streamer, game, prediction_title)
 
+        logger.info(
+            "[AIBetAnalyzer] Prepared prompt payload | "
+            f"system_language={self.settings.language} | outcomes_count={len(outcome_titles)}"
+        )
+        logger.info(f"[AIBetAnalyzer] User prompt:\n{user_msg}")
+
         kwargs = {
             "model": self.settings.model,
             "max_tokens": 500,
@@ -254,18 +284,53 @@ class AIBetAnalyzer:
         if self.settings.use_web_search:
             kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
 
+        logger.info(
+            "[AIBetAnalyzer] Sending Anthropic request | "
+            f"model={kwargs['model']} | max_tokens={kwargs['max_tokens']} | "
+            f"tools={kwargs.get('tools', [])}"
+        )
+
         response = self._client.messages.create(**kwargs)
+
+        logger.info(
+            "[AIBetAnalyzer] Anthropic response received | "
+            f"stop_reason={getattr(response, 'stop_reason', None)} | "
+            f"content_blocks={len(getattr(response, 'content', []) or [])}"
+        )
 
         text = ""
         used_search = False
+        block_summaries = []
         for block in response.content:
             if getattr(block, "type", None) == "text":
                 text += block.text
+                block_summaries.append(
+                    {
+                        "type": "text",
+                        "text_preview": block.text[:300],
+                    }
+                )
             elif (
                 getattr(block, "type", None) == "tool_use"
                 and getattr(block, "name", None) == "web_search"
             ):
                 used_search = True
+                block_summaries.append(
+                    {
+                        "type": "tool_use",
+                        "name": getattr(block, "name", None),
+                        "input": getattr(block, "input", None),
+                    }
+                )
+            else:
+                block_summaries.append(
+                    {
+                        "type": getattr(block, "type", None),
+                        "name": getattr(block, "name", None),
+                    }
+                )
+
+        logger.info(f"[AIBetAnalyzer] Response blocks: {block_summaries}")
 
         text = text.strip()
         if "```" in text:
@@ -273,7 +338,10 @@ class AIBetAnalyzer:
             if len(chunks) > 1:
                 text = chunks[1].replace("json", "", 1).strip()
 
+        logger.info(f"[AIBetAnalyzer] Raw response text:\n{text}")
+
         data = json.loads(text)
+        logger.info(f"[AIBetAnalyzer] Parsed JSON: {data}")
         confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
         preferred = int(data.get("preferred_outcome_index", 0))
         preferred = max(0, min(preferred, len(outcome_titles) - 1))
