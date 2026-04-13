@@ -9,6 +9,31 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def _patch_anthropic_httpx_wrapper(anthropic_module):
+    try:
+        wrapper = anthropic_module._base_client.SyncHttpxClientWrapper
+    except AttributeError:
+        return
+
+    if getattr(wrapper, "_tcpm_safe_del", False):
+        return
+
+    def _safe_del(self):
+        try:
+            if getattr(self, "_state", None) is None or self.is_closed:
+                return
+        except Exception:
+            return
+
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    wrapper.__del__ = _safe_del
+    wrapper._tcpm_safe_del = True
+
+
 @dataclass
 class AIAnalyzerSettings:
     api_key: str = ""
@@ -125,6 +150,7 @@ class AIBetAnalyzer:
         try:
             import anthropic
 
+            _patch_anthropic_httpx_wrapper(anthropic)
             self._client = anthropic.Anthropic(api_key=self.settings.api_key)
             logger.info("[AIBetAnalyzer] Anthropic client initialized")
         except ImportError:
