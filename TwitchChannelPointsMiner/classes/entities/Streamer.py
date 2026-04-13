@@ -206,10 +206,9 @@ class Streamer(object):
         if delay_mode == DelayMode.FROM_START:
             return min(delay, prediction_window_seconds)
         elif delay_mode == DelayMode.FROM_END:
-            # AI delay disabled.
-            # delay += self.settings.bet.get_ai_delay_seconds(
-            #     can_use_ai=self.explicitly_configured
-            # )
+            delay += self.settings.bet.get_ai_delay_seconds(
+                can_use_ai=self.explicitly_configured
+            )
             return max(prediction_window_seconds - delay, 0)
         elif delay_mode == DelayMode.PERCENTAGE:
             return prediction_window_seconds * delay
