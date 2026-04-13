@@ -21,7 +21,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --fix-missing --no-ins
     libblas-dev \
     liblapack-dev \
     make \
-    cmake \
+    cmake \    
     automake \
     ninja-build \
     g++ \
@@ -40,6 +40,4 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --fix-missing --no-ins
   && rm -rf /usr/share/doc/*
 
 ADD ./TwitchChannelPointsMiner ./TwitchChannelPointsMiner
-ADD ./example.py ./example.py
-
-ENTRYPOINT ["python", "example.py"]
+ENTRYPOINT [ "python", "example.py" ]
