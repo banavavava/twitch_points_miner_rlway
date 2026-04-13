@@ -673,6 +673,11 @@ class Twitch(object):
 
         response = self.post_gql_request(json_data)
         if response != {}:
+            if "data" not in response:
+                logger.error(
+                    f"Invalid GQL response for channel points context: {response}"
+                )
+                return
             if response["data"]["community"] is None:
                 raise StreamerDoesNotExistException
             channel = response["data"]["community"]["channel"]
