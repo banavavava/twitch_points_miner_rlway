@@ -277,49 +277,90 @@ class Bet(object):
             and self.settings.uncertain_odds_min <= odds_percentage <= self.settings.uncertain_odds_max
         )
 
-    def skip(self) -> bool:
-        if self.settings.filter_condition is not None:
-            conditions = (
-                self.settings.filter_condition
-                if isinstance(self.settings.filter_condition, (list, tuple))
-                else [self.settings.filter_condition]
+    def __get_filter_conditions(self):
+        if self.settings.filter_condition is None:
+            return []
+        return (
+            self.settings.filter_condition
+            if isinstance(self.settings.filter_condition, (list, tuple))
+            else [self.settings.filter_condition]
+        )
+
+    @staticmethod
+    def __matches_filter_condition(condition, compared_value, value) -> bool:
+        if condition == Condition.GT:
+            return compared_value > value
+        elif condition == Condition.LT:
+            return compared_value < value
+        elif condition == Condition.GTE:
+            return compared_value >= value
+        elif condition == Condition.LTE:
+            return compared_value <= value
+        return False
+
+    def __get_compared_value(self, filter_condition, choice):
+        key = filter_condition.by
+        fixed_key = (
+            key
+            if key not in [OutcomeKeys.DECISION_USERS, OutcomeKeys.DECISION_POINTS]
+            else key.replace("decision", "total")
+        )
+        if key in [OutcomeKeys.TOTAL_USERS, OutcomeKeys.TOTAL_POINTS]:
+            return self.outcomes[0][fixed_key] + self.outcomes[1][fixed_key]
+        return self.outcomes[choice][fixed_key]
+
+    def __get_uncertain_choice(self):
+        uncertain_choices = [
+            index
+            for index in range(0, len(self.outcomes))
+            if self.__is_uncertain_odds(
+                self.outcomes[index][OutcomeKeys.ODDS_PERCENTAGE]
             )
+        ]
+        if len(uncertain_choices) == 0:
+            return None
+        return max(
+            uncertain_choices,
+            key=lambda index: self.outcomes[index][OutcomeKeys.ODDS_PERCENTAGE],
+        )
+
+    def __apply_uncertain_choice_override(self):
+        if self.decision["choice"] is None:
+            return
+
+        uncertain_choice = self.__get_uncertain_choice()
+        if uncertain_choice is None or uncertain_choice == self.decision["choice"]:
+            return
+
+        for filter_condition in self.__get_filter_conditions():
+            compared_value = self.__get_compared_value(
+                filter_condition, self.decision["choice"]
+            )
+            if self.__matches_filter_condition(
+                filter_condition.where, compared_value, filter_condition.value
+            ):
+                continue
+
+            if filter_condition.by == OutcomeKeys.ODDS_PERCENTAGE:
+                self.decision["choice"] = uncertain_choice
+            return
+
+    def skip(self) -> bool:
+        conditions = self.__get_filter_conditions()
+        if len(conditions) > 0:
             compared_values = []
             for filter_condition in conditions:
-                # key == by , condition == where
                 key = filter_condition.by
                 condition = filter_condition.where
                 value = filter_condition.value
-
-                fixed_key = (
-                    key
-                    if key not in [OutcomeKeys.DECISION_USERS, OutcomeKeys.DECISION_POINTS]
-                    else key.replace("decision", "total")
+                compared_value = self.__get_compared_value(
+                    filter_condition, self.decision["choice"]
                 )
-                if key in [OutcomeKeys.TOTAL_USERS, OutcomeKeys.TOTAL_POINTS]:
-                    compared_value = (
-                        self.outcomes[0][fixed_key] + self.outcomes[1][fixed_key]
-                    )
-                else:
-                    #outcome_index = char_decision_as_index(self.decision["choice"])
-                    outcome_index = self.decision["choice"]
-                    compared_value = self.outcomes[outcome_index][fixed_key]
 
                 compared_values.append(compared_value)
 
-                # Check if condition is satisfied
-                if condition == Condition.GT:
-                    if compared_value > value:
-                        continue
-                elif condition == Condition.LT:
-                    if compared_value < value:
-                        continue
-                elif condition == Condition.GTE:
-                    if compared_value >= value:
-                        continue
-                elif condition == Condition.LTE:
-                    if compared_value <= value:
-                        continue
+                if self.__matches_filter_condition(condition, compared_value, value):
+                    continue
 
                 if (
                     key == OutcomeKeys.ODDS_PERCENTAGE
@@ -371,6 +412,7 @@ class Bet(object):
             )
 
         if self.decision["choice"] is not None:
+            self.__apply_uncertain_choice_override()
             #index = char_decision_as_index(self.decision["choice"])
             index = self.decision["choice"]
             self.decision["id"] = self.outcomes[index]["id"]
