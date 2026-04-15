@@ -54,7 +54,7 @@ twitch_miner = TwitchChannelPointsMiner(
         community_goals=False,
         chat=ChatPresence.ONLINE,
         bet=BetSettings(
-            strategy=Strategy.SMART,
+            strategy=Strategy.PERCENTAGE,
             percentage=5,
             percentage_gap=30,      # Увеличена разница между исходами
             max_points=30000,       # Снижен максимальный риск
@@ -94,7 +94,7 @@ twitch_miner.mine(
                 watch_streak=True,
                 community_goals=False,
                 bet=BetSettings(
-                    strategy=Strategy.SMART,
+                    strategy=Strategy.PERCENTAGE,
                     percentage=24,
                     percentage_gap=30,
                     max_points=55000,
@@ -121,7 +121,7 @@ twitch_miner.mine(
                 watch_streak=True,
                 community_goals=False,
                 bet=BetSettings(
-                    strategy=Strategy.SMART,
+                    strategy=Strategy.PERCENTAGE,
                     percentage=24,
                     percentage_gap=30,
                     max_points=100000,

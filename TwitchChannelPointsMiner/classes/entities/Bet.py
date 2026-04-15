@@ -319,9 +319,16 @@ class Bet(object):
         ]
         if len(uncertain_choices) == 0:
             return None
+
+        if len(uncertain_choices) == 1:
+            return uncertain_choices[0]
+
         return max(
             uncertain_choices,
-            key=lambda index: self.outcomes[index][OutcomeKeys.ODDS_PERCENTAGE],
+            key=lambda index: (
+                self.outcomes[index][OutcomeKeys.TOP_POINTS],
+                self.outcomes[index][OutcomeKeys.ODDS_PERCENTAGE],
+            ),
         )
 
     def __apply_uncertain_choice_override(self):
