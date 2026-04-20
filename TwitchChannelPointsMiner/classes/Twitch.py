@@ -13,7 +13,8 @@ import string
 import time
 import requests
 import validators
-# import json
+import json
+from datetime import datetime, timezone
 
 from pathlib import Path
 from secrets import choice, token_hex
@@ -145,13 +146,20 @@ class Twitch(object):
             response = main_page_request.text
             # logger.info(response)
             regex_settings = "(https://static.twitchcdn.net/config/settings.*?js|https://assets.twitch.tv/config/settings.*?.js)"
-            settings_url = re.search(regex_settings, response).group(1)
+            settings_match = re.search(regex_settings, response)
+            if settings_match is None:
+                logger.error("Unable to extract settings_url from streamer page")
+                return
+            settings_url = settings_match.group(1)
 
             settings_request = requests.get(settings_url, headers=headers)
             response = settings_request.text
             regex_spade = '"spade_url":"(.*?)"'
-            streamer.stream.spade_url = re.search(
-                regex_spade, response).group(1)
+            spade_match = re.search(regex_spade, response)
+            if spade_match is None:
+                logger.error("Unable to extract spade_url from settings script")
+                return
+            streamer.stream.spade_url = spade_match.group(1)
         except requests.exceptions.RequestException as e:
             logger.error(
                 f"Something went wrong during extraction of 'spade_url': {e}")
@@ -666,6 +674,199 @@ class Twitch(object):
                     "Exception raised in send minute watched", exc_info=True)
 
     # === CHANNEL POINTS / PREDICTION === #
+    def __reward_cost(self, reward):
+        return reward.get("cost") or reward.get("defaultCost")
+
+    def __parse_twitch_timestamp(self, dt_str):
+        if not dt_str:
+            return None
+        try:
+            return datetime.fromisoformat(dt_str.replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            return None
+
+    def __schedule_auto_redeem_check(self, streamer, timestamp):
+        if timestamp is None:
+            return
+        if streamer.auto_redeem_next_check_at == 0:
+            streamer.auto_redeem_next_check_at = timestamp
+        else:
+            streamer.auto_redeem_next_check_at = min(
+                streamer.auto_redeem_next_check_at, timestamp
+            )
+
+    def __redeem_custom_reward(self, streamer, reward, text_input=None):
+        cost = self.__reward_cost(reward)
+        if cost is None:
+            logger.warning(
+                f"Skip redeem for {streamer} reward {reward.get('id')}: missing cost"
+            )
+            return False
+
+        json_data = copy.deepcopy(GQLOperations.RedeemCustomReward)
+        json_data["variables"] = {
+            "input": {
+                "channelID": streamer.channel_id,
+                "cost": int(cost),
+                "pricingType": reward.get("pricingType") or "POINTS",
+                "prompt": reward.get("prompt"),
+                "rewardID": reward.get("id"),
+                "title": reward.get("title"),
+                "transactionID": token_hex(16),
+            }
+        }
+        # Twitch may reject redemption with PROPERTIES_MISMATCH if textInput is sent
+        # for rewards that do not require user input.
+        if text_input and reward.get("isUserInputRequired") is True:
+            json_data["variables"]["input"]["textInput"] = text_input
+        elif text_input and reward.get("isUserInputRequired") is not True:
+            logger.debug(
+                "Skip textInput for reward '%s' (%s): isUserInputRequired=%s",
+                reward.get("title"),
+                reward.get("id"),
+                reward.get("isUserInputRequired"),
+            )
+
+        response = self.post_gql_request(json_data)
+        logger.debug(
+            "RedeemCustomReward response for '%s' (%s): input=%s response=%s",
+            reward.get("title"),
+            reward.get("id"),
+            json.dumps(json_data.get("variables", {}).get("input", {}), ensure_ascii=False),
+            json.dumps(response, ensure_ascii=False),
+        )
+
+        gql_errors = response.get("errors")
+        payload = (
+            response.get("data", {}).get("redeemCommunityPointsCustomReward", {})
+            if isinstance(response, dict)
+            else {}
+        )
+        payload_error = payload.get("error") if isinstance(payload, dict) else None
+
+        # Twitch may return HTTP 200 with business error inside payload.error.
+        has_error = bool(gql_errors) or (payload_error is not None)
+        if not has_error:
+            logger.info(
+                f"Auto redeemed reward '{reward.get('title')}' for {streamer}",
+                extra={"emoji": ":ticket:", "event": Events.GAIN_FOR_WATCH},
+            )
+            return True
+
+        error_code = (
+            payload_error.get("code")
+            if isinstance(payload_error, dict)
+            else None
+        )
+        logger.warning(
+            f"Failed to auto redeem reward '{reward.get('title')}' for {streamer}. "
+            f"error_code={error_code}, gql_errors={gql_errors}, response={response}"
+        )
+        return False
+
+    def __handle_streamer_rewards(self, streamer, channel):
+        settings = streamer.settings
+        redeem_titles = settings.auto_redeem_reward_titles
+        if isinstance(redeem_titles, str):
+            redeem_titles = [redeem_titles]
+
+        if (
+            settings.fetch_rewards is not True
+            and len(settings.auto_redeem_reward_ids) == 0
+            and len(redeem_titles) == 0
+        ):
+            return
+
+        # Default to a periodic refresh for auto-redeem streamers.
+        streamer.auto_redeem_next_check_at = time.time() + 60
+
+        cps = channel.get("communityPointsSettings", {})
+        custom_rewards = cps.get("customRewards", []) if cps else []
+        automatic_rewards = cps.get("automaticRewards", []) if cps else []
+
+        if settings.fetch_rewards is True:
+            logger.debug(
+                f"Rewards for {streamer}: automatic={len(automatic_rewards)} custom={len(custom_rewards)}"
+            )
+            for reward in custom_rewards:
+                logger.debug(
+                    f"[CUSTOM] {reward.get('title')} | id={reward.get('id')} | cost={self.__reward_cost(reward)} | inStock={reward.get('isInStock')}"
+                )
+
+        by_id = {
+            reward.get("id"): reward
+            for reward in custom_rewards
+            if reward.get("id") is not None
+        }
+        by_title_exact = {
+            (reward.get("title") or "").strip().lower(): reward
+            for reward in custom_rewards
+        }
+
+        targets = []
+        for reward_id in settings.auto_redeem_reward_ids:
+            reward = by_id.get(reward_id)
+            if reward is not None:
+                targets.append(reward)
+        for reward_title in redeem_titles:
+            normalized_title = (reward_title or "").strip().lower()
+            if normalized_title == "":
+                continue
+
+            # Exact title match first.
+            reward = by_title_exact.get(normalized_title)
+            if reward is not None:
+                targets.append(reward)
+                continue
+
+            # Fallback: partial title match so user can provide only a fragment.
+            for candidate in custom_rewards:
+                candidate_title = (candidate.get("title") or "").strip().lower()
+                if normalized_title in candidate_title:
+                    targets.append(candidate)
+                    break
+
+        seen = set()
+        for reward in targets:
+            reward_id = reward.get("id")
+            if reward_id in seen:
+                continue
+            seen.add(reward_id)
+
+            if (
+                settings.auto_redeem_repeat is not True
+                and reward_id in streamer.auto_redeemed_rewards
+            ):
+                continue
+
+            if reward.get("isInStock") is not True:
+                cooldown_ts = self.__parse_twitch_timestamp(reward.get("cooldownExpiresAt"))
+                if cooldown_ts is not None:
+                    # Re-check shortly after cooldown end.
+                    self.__schedule_auto_redeem_check(streamer, cooldown_ts + 1)
+                logger.info(
+                    f"Skip auto redeem for {streamer}: '{reward.get('title')}' is out of stock "
+                    f"(cooldownExpiresAt={reward.get('cooldownExpiresAt')}, "
+                    f"next_check_at={datetime.fromtimestamp(streamer.auto_redeem_next_check_at, timezone.utc).isoformat() if streamer.auto_redeem_next_check_at else None})"
+                )
+                continue
+
+            if streamer.channel_points < int(self.__reward_cost(reward) or 0):
+                self.__schedule_auto_redeem_check(streamer, time.time() + 60)
+                logger.info(
+                    f"Skip auto redeem for {streamer}: not enough points for '{reward.get('title')}'"
+                )
+                continue
+
+            redeemed = self.__redeem_custom_reward(
+                streamer, reward, text_input=settings.auto_redeem_text
+            )
+            if redeemed is True:
+                if settings.auto_redeem_repeat is not True:
+                    streamer.auto_redeemed_rewards.add(reward_id)
+                # Refresh soon to observe newly assigned cooldown and continue cycle.
+                self.__schedule_auto_redeem_check(streamer, time.time() + 20)
+
     # Load the amount of current points for a channel, check if a bonus is available
     def load_channel_points_context(self, streamer):
         json_data = copy.deepcopy(GQLOperations.ChannelPointsContext)
@@ -695,6 +896,8 @@ class Twitch(object):
 
             if streamer.settings.community_goals is True:
                 self.contribute_to_community_goals(streamer)
+
+            self.__handle_streamer_rewards(streamer, channel)
 
     def make_predictions(self, event):
         decision = event.bet.calculate(event.streamer.channel_points)

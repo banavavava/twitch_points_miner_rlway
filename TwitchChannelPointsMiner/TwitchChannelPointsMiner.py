@@ -7,6 +7,7 @@ import signal
 import sys
 import threading
 import time
+from typing import Optional
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -74,7 +75,7 @@ class TwitchChannelPointsMiner:
     def __init__(
         self,
         username: str,
-        password: str = None,
+        password: Optional[str] = None,
         claim_drops_startup: bool = False,
         enable_analytics: bool = False,
         disable_ssl_cert_verification: bool = False,
@@ -82,9 +83,9 @@ class TwitchChannelPointsMiner:
         # Settings for logging and selenium as you can see.
         priority: list = [Priority.STREAK, Priority.DROPS, Priority.ORDER],
         # This settings will be global shared trought Settings class
-        logger_settings: LoggerSettings = LoggerSettings(),
+        logger_settings: Optional[LoggerSettings] = None,
         # Default values for all streamers
-        streamer_settings: StreamerSettings = StreamerSettings(),
+        streamer_settings: Optional[StreamerSettings] = None,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -127,11 +128,18 @@ class TwitchChannelPointsMiner:
 
         self.username = username
 
+        if logger_settings is None:
+            logger_settings = LoggerSettings()
+        if streamer_settings is None:
+            streamer_settings = StreamerSettings()
+
         # Set as global config
         Settings.logger = logger_settings
 
         # Init as default all the missing values
         streamer_settings.default()
+        if streamer_settings.bet is None:
+            assert False, "streamer_settings.bet can't be None, it will be initialized with default values if you don't provide it"
         streamer_settings.bet.default()
         Settings.streamer_settings = streamer_settings
 
@@ -233,6 +241,8 @@ class TwitchChannelPointsMiner:
 
             streamers_name: list = []
             streamers_dict: dict = {}
+            explicit_streamers_usernames: set[str] = set()
+            streamer_context_interval: dict[str, int] = {}
 
             for streamer in streamers:
                 username = (
@@ -243,6 +253,8 @@ class TwitchChannelPointsMiner:
                 if username not in blacklist:
                     streamers_name.append(username)
                     streamers_dict[username] = streamer
+                    explicit_streamers_usernames.add(username)
+                    streamer_context_interval[username] = 12
 
             if followers is True:
                 followers_array = self.twitch.get_followers(order=followers_order)
@@ -254,6 +266,7 @@ class TwitchChannelPointsMiner:
                     if username not in streamers_dict and username not in blacklist:
                         streamers_name.append(username)
                         streamers_dict[username] = username.lower().strip()
+                        streamer_context_interval[username] = 60
 
             logger.info(
                 f"Loading data for {len(streamers_name)} streamers. Please wait...",
@@ -261,7 +274,13 @@ class TwitchChannelPointsMiner:
             )
             for username in streamers_name:
                 if username in streamers_name:
-                    time.sleep(random.uniform(0.3, 0.7))
+                    interval = streamer_context_interval.get(username, 60)
+                    startup_delay = (
+                        random.uniform(0.05, 0.15)
+                        if interval == 12
+                        else random.uniform(0.15, 0.35)
+                    )
+                    time.sleep(startup_delay)
                     try:
                         streamer = (
                             streamers_dict[username]
@@ -293,10 +312,19 @@ class TwitchChannelPointsMiner:
             # 2. Check if streamers are online
             # 3. DEACTIVATED: Check if the user is a moderator. (was used before the 5th of April 2021 to deactivate predictions)
             for streamer in self.streamers:
-                time.sleep(random.uniform(0.3, 0.7))
+                interval = streamer_context_interval.get(streamer.username, 60)
+                startup_delay = (
+                    random.uniform(0.05, 0.15)
+                    if interval == 12
+                    else random.uniform(0.15, 0.35)
+                )
+                time.sleep(startup_delay)
                 try:
                     self.twitch.load_channel_points_context(streamer)
-                    self.twitch.check_streamer_online(streamer)
+                    # Full online check at startup only for streamers explicitly passed to mine(...),
+                    # followers will be tracked by pubsub shortly after startup.
+                    if streamer.username in explicit_streamers_usernames:
+                        self.twitch.check_streamer_online(streamer)
                     # self.twitch.viewer_is_mod(streamer)
                 except StreamerDoesNotExistException:
                     logger.info(
@@ -307,6 +335,10 @@ class TwitchChannelPointsMiner:
             self.original_streamers = [
                 streamer.channel_points for streamer in self.streamers
             ]
+            next_context_check_at: dict[str, float] = {}
+            for streamer in self.streamers:
+                interval = streamer_context_interval.get(streamer.username, 60)
+                next_context_check_at[streamer.username] = time.time() + interval
 
             # If we have at least one streamer with settings = make_predictions True
             make_predictions = at_least_one_value_in_settings_is(
@@ -366,31 +398,51 @@ class TwitchChannelPointsMiner:
                 )
 
             for streamer in self.streamers:
+                settings = streamer.settings
+                if settings is None:
+                    continue
                 self.ws_pool.submit(
                     PubsubTopic("video-playback-by-id", streamer=streamer)
                 )
 
-                if streamer.settings.follow_raid is True:
+                if settings.follow_raid is True:
                     self.ws_pool.submit(PubsubTopic("raid", streamer=streamer))
 
-                if streamer.settings.make_predictions is True:
+                if settings.make_predictions is True:
                     self.ws_pool.submit(
                         PubsubTopic("predictions-channel-v1", streamer=streamer)
                     )
 
-                if streamer.settings.claim_moments is True:
+                if settings.claim_moments is True:
                     self.ws_pool.submit(
                         PubsubTopic("community-moments-channel-v1", streamer=streamer)
                     )
 
-                if streamer.settings.community_goals is True:
+                if settings.community_goals is True:
                     self.ws_pool.submit(
                         PubsubTopic("community-points-channel-v1", streamer=streamer)
                     )
 
             refresh_context = time.time()
             while self.running:
-                time.sleep(random.uniform(20, 60))
+                default_sleep = random.uniform(20, 60)
+                next_due_times = []
+                for streamer in self.streamers:
+                    due_at = next_context_check_at.get(streamer.username, 0)
+                    if due_at != 0:
+                        next_due_times.append(due_at)
+                    if streamer.auto_redeem_next_check_at != 0:
+                        next_due_times.append(streamer.auto_redeem_next_check_at)
+
+                if len(next_due_times) > 0:
+                    earliest_due = min(next_due_times)
+                    wait_for = max(0.0, earliest_due - time.time())
+                    # Wake up close to reward cooldown/context deadlines.
+                    sleep_for = min(default_sleep, max(1.0, wait_for))
+                else:
+                    sleep_for = default_sleep
+
+                time.sleep(sleep_for)
                 # Do an external control for WebSocket. Check if the thread is running
                 # Check if is not None because maybe we have already created a new connection on array+1 and now index is None
                 for index in range(0, len(self.ws_pool.ws)):
@@ -407,10 +459,39 @@ class TwitchChannelPointsMiner:
                 if ((time.time() - refresh_context) // 60) >= 30:
                     refresh_context = time.time()
                     for index in range(0, len(self.streamers)):
-                        if self.streamers[index].is_online:
-                            self.twitch.load_channel_points_context(
-                                self.streamers[index]
-                            )
+                        streamer = self.streamers[index]
+                        if streamer.is_online:
+                            self.twitch.load_channel_points_context(streamer)
+                            interval = streamer_context_interval.get(streamer.username, 60)
+                            next_context_check_at[streamer.username] = time.time() + interval
+                else:
+                    for index in range(0, len(self.streamers)):
+                        streamer = self.streamers[index]
+                        settings = streamer.settings
+                        if settings is None:
+                            continue
+                        has_auto_redeem_targets = (
+                            len(settings.auto_redeem_reward_ids or []) > 0
+                            or len(settings.auto_redeem_reward_titles or []) > 0
+                        )
+                        # Dynamic context refresh cadence:
+                        # - explicit streamers from .mine(...) every 12s
+                        # - followers-discovered streamers every 60s
+                        due_at = next_context_check_at.get(streamer.username, 0)
+                        if due_at != 0 and time.time() >= due_at:
+                            self.twitch.load_channel_points_context(streamer)
+                            interval = streamer_context_interval.get(streamer.username, 60)
+                            next_context_check_at[streamer.username] = time.time() + interval
+
+                        if (
+                            streamer.is_online
+                            and has_auto_redeem_targets
+                            and streamer.auto_redeem_next_check_at != 0
+                            and time.time() >= streamer.auto_redeem_next_check_at
+                        ):
+                            # Reset before request to avoid tight loops on failures.
+                            streamer.auto_redeem_next_check_at = 0
+                            self.twitch.load_channel_points_context(streamer)
 
     def end(self, signum, frame):
         if not self.running:
@@ -419,9 +500,11 @@ class TwitchChannelPointsMiner:
         logger.info("CTRL+C Detected! Please wait just a moment!")
 
         for streamer in self.streamers:
+            settings = streamer.settings
             if (
                 streamer.irc_chat is not None
-                and streamer.settings.chat != ChatPresence.NEVER
+                and settings is not None
+                and settings.chat != ChatPresence.NEVER
             ):
                 streamer.leave_chat()
                 if streamer.irc_chat.is_alive() is True:
@@ -460,8 +543,13 @@ class TwitchChannelPointsMiner:
             logger.info(
                 f"Logs file: {self.logs_file}", extra={"emoji": ":page_facing_up:"}
             )
+        session_duration = (
+            datetime.now() - self.start_datetime
+            if self.start_datetime is not None
+            else "unknown"
+        )
         logger.info(
-            f"Duration {datetime.now() - self.start_datetime}",
+            f"Duration {session_duration}",
             extra={"emoji": ":hourglass:"},
         )
 

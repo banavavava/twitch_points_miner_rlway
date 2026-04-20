@@ -103,6 +103,15 @@ class GQLOperations:
             }
         },
     }
+    RedeemCustomReward = {
+        "operationName": "RedeemCustomReward",
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "d56249a7adb4978898ea3412e196688d4ac3cea1c0c2dfd65561d229ea5dcc42",
+            }
+        },
+    }
     JoinRaid = {
         "operationName": "JoinRaid",
         "extensions": {

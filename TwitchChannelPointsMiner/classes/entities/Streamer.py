@@ -4,6 +4,7 @@ import os
 import time
 from datetime import datetime
 from threading import Lock
+from typing import List, Optional
 
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
 from TwitchChannelPointsMiner.classes.entities.Bet import BetSettings, DelayMode
@@ -25,18 +26,28 @@ class StreamerSettings(object):
         "community_goals",
         "bet",
         "chat",
+        "fetch_rewards",
+        "auto_redeem_reward_ids",
+        "auto_redeem_reward_titles",
+        "auto_redeem_text",
+        "auto_redeem_repeat",
     ]
 
     def __init__(
         self,
-        make_predictions: bool = None,
-        follow_raid: bool = None,
-        claim_drops: bool = None,
-        claim_moments: bool = None,
-        watch_streak: bool = None,
-        community_goals: bool = None,
-        bet: BetSettings = None,
-        chat: ChatPresence = None,
+        make_predictions: Optional[bool] = None,
+        follow_raid: Optional[bool] = None,
+        claim_drops: Optional[bool] = None,
+        claim_moments: Optional[bool] = None,
+        watch_streak: Optional[bool] = None,
+        community_goals: Optional[bool] = None,
+        bet: Optional[BetSettings] = None,
+        chat: Optional[ChatPresence] = None,
+        fetch_rewards: Optional[bool] = None,
+        auto_redeem_reward_ids: Optional[List[str]] = None,
+        auto_redeem_reward_titles: Optional[List[str]] = None,
+        auto_redeem_text: Optional[str] = None,
+        auto_redeem_repeat: Optional[bool] = None,
     ):
         self.make_predictions = make_predictions
         self.follow_raid = follow_raid
@@ -46,6 +57,11 @@ class StreamerSettings(object):
         self.community_goals = community_goals
         self.bet = bet
         self.chat = chat
+        self.fetch_rewards = fetch_rewards
+        self.auto_redeem_reward_ids = auto_redeem_reward_ids
+        self.auto_redeem_reward_titles = auto_redeem_reward_titles
+        self.auto_redeem_text = auto_redeem_text
+        self.auto_redeem_repeat = auto_redeem_repeat
 
     def default(self):
         for name in [
@@ -63,9 +79,24 @@ class StreamerSettings(object):
             self.bet = BetSettings()
         if self.chat is None:
             self.chat = ChatPresence.ONLINE
+        if self.fetch_rewards is None:
+            self.fetch_rewards = False
+        if self.auto_redeem_reward_ids is None:
+            self.auto_redeem_reward_ids = []
+        if self.auto_redeem_reward_titles is None:
+            self.auto_redeem_reward_titles = []
+        if self.auto_redeem_repeat is None:
+            self.auto_redeem_repeat = False
 
     def __repr__(self):
-        return f"BetSettings(make_predictions={self.make_predictions}, follow_raid={self.follow_raid}, claim_drops={self.claim_drops}, claim_moments={self.claim_moments}, watch_streak={self.watch_streak}, community_goals={self.community_goals}, bet={self.bet}, chat={self.chat})"
+        return (
+            f"BetSettings(make_predictions={self.make_predictions}, follow_raid={self.follow_raid}, "
+            f"claim_drops={self.claim_drops}, claim_moments={self.claim_moments}, watch_streak={self.watch_streak}, "
+            f"community_goals={self.community_goals}, bet={self.bet}, chat={self.chat}, "
+            f"fetch_rewards={self.fetch_rewards}, auto_redeem_reward_ids={self.auto_redeem_reward_ids}, "
+            f"auto_redeem_reward_titles={self.auto_redeem_reward_titles}, auto_redeem_text={self.auto_redeem_text}, "
+            f"auto_redeem_repeat={self.auto_redeem_repeat})"
+        )
 
 
 class Streamer(object):
@@ -88,9 +119,11 @@ class Streamer(object):
         "history",
         "streamer_url",
         "mutex",
+        "auto_redeemed_rewards",
+        "auto_redeem_next_check_at",
     ]
 
-    def __init__(self, username, settings=None):
+    def __init__(self, username, settings: Optional[StreamerSettings] = None):
         self.username: str = username.lower().strip()
         self.channel_id: str = ""
         self.settings = settings
@@ -113,6 +146,8 @@ class Streamer(object):
         self.streamer_url = f"{URL}/{self.username}"
 
         self.mutex = Lock()
+        self.auto_redeemed_rewards = set()
+        self.auto_redeem_next_check_at = 0
 
     def __repr__(self):
         return f"Streamer(username={self.username}, channel_id={self.channel_id}, channel_points={_millify(self.channel_points)})"
@@ -177,6 +212,8 @@ class Streamer(object):
         return self.stream_up == 0 or ((time.time() - self.stream_up) > 120)
 
     def drops_condition(self):
+        if self.settings is None:
+            return False
         return (
             self.settings.claim_drops is True
             and self.is_online is True
@@ -200,6 +237,8 @@ class Streamer(object):
         )
 
     def get_prediction_window(self, prediction_window_seconds):
+        if self.settings is None or self.settings.bet is None:
+            return prediction_window_seconds
         delay_mode = self.settings.bet.delay_mode
         delay = self.settings.bet.delay
         if delay_mode == DelayMode.FROM_START:
@@ -279,6 +318,8 @@ class Streamer(object):
                 self.irc_chat.start()
 
     def toggle_chat(self):
+        if self.settings is None:
+            return
         if self.settings.chat == ChatPresence.ALWAYS:
             self.__join_chat()
         elif self.settings.chat != ChatPresence.NEVER:

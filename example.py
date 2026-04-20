@@ -93,6 +93,10 @@ twitch_miner.mine(
                 claim_drops=True,
                 watch_streak=True,
                 community_goals=False,
+                fetch_rewards=False,                 # Print current rewards from ChannelPointsContext
+                auto_redeem_reward_ids=[],          # Example: ["cb303f46-8d7b-4f4e-9262-aaa796fab3c2"]
+                auto_redeem_reward_titles=[],       # Example: ["stay hydrated!"]
+                auto_redeem_text=None,              # Optional textInput for reward redeem
                 bet=BetSettings(
                     strategy=Strategy.PERCENTAGE,
                     percentage=24,
@@ -120,11 +124,47 @@ twitch_miner.mine(
                 claim_drops=True,
                 watch_streak=True,
                 community_goals=False,
+                fetch_rewards=False,
+                auto_redeem_reward_ids=[],
+                auto_redeem_reward_titles=[],
+                auto_redeem_text=None,
                 bet=BetSettings(
                     strategy=Strategy.PERCENTAGE,
                     percentage=24,
                     percentage_gap=30,
                     max_points=100000,
+                    stealth_mode=False,
+                    delay_mode=DelayMode.FROM_END,
+                    delay=4,
+                    minimum_points=10000,
+                    uncertain_percentage=10,
+                    uncertain_odds_min=41,
+                    uncertain_odds_max=59,
+                    uncertain_max_points=12000,
+                    filter_condition=FilterCondition(
+                        by=OutcomeKeys.ODDS_PERCENTAGE, where=Condition.GTE, value=60
+                    )
+                )
+            )
+        ),
+        Streamer(
+            "saintsakura",
+            settings=StreamerSettings(
+                make_predictions=True,
+                follow_raid=True,
+                claim_drops=True,
+                watch_streak=True,
+                community_goals=False,
+                fetch_rewards=True,                        # Print rewards and resolve IDs by title automatically
+                auto_redeem_reward_ids=[],                 # Optional direct IDs (can stay empty)
+                auto_redeem_reward_titles=["First!"],  # You can use full or partial title
+                auto_redeem_text="",
+                auto_redeem_repeat=True,                   # Redeem again automatically when cooldown ends
+                bet=BetSettings(
+                    strategy=Strategy.PERCENTAGE,
+                    percentage=24,
+                    percentage_gap=30,
+                    max_points=55000,
                     stealth_mode=False,
                     delay_mode=DelayMode.FROM_END,
                     delay=4,
