@@ -320,7 +320,9 @@ class TwitchChannelPointsMiner:
                 )
                 time.sleep(startup_delay)
                 try:
-                    self.twitch.load_channel_points_context(streamer)
+                    self.twitch.load_channel_points_context(
+                        streamer, include_rewards=False
+                    )
                     # Full online check at startup only for streamers explicitly passed to mine(...),
                     # followers will be tracked by pubsub shortly after startup.
                     if streamer.username in explicit_streamers_usernames:
@@ -461,7 +463,9 @@ class TwitchChannelPointsMiner:
                     for index in range(0, len(self.streamers)):
                         streamer = self.streamers[index]
                         if streamer.is_online:
-                            self.twitch.load_channel_points_context(streamer)
+                            self.twitch.load_channel_points_context(
+                                streamer, include_rewards=False
+                            )
                             interval = streamer_context_interval.get(streamer.username, 60)
                             next_context_check_at[streamer.username] = time.time() + interval
                 else:
@@ -479,7 +483,9 @@ class TwitchChannelPointsMiner:
                         # - followers-discovered streamers every 60s
                         due_at = next_context_check_at.get(streamer.username, 0)
                         if due_at != 0 and time.time() >= due_at:
-                            self.twitch.load_channel_points_context(streamer)
+                            self.twitch.load_channel_points_context(
+                                streamer, include_rewards=False
+                            )
                             interval = streamer_context_interval.get(streamer.username, 60)
                             next_context_check_at[streamer.username] = time.time() + interval
 

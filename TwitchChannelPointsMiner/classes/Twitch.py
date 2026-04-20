@@ -190,6 +190,7 @@ class Twitch(object):
         if time.time() < streamer.offline_at + 60:
             return
 
+        was_online = streamer.is_online
         if streamer.is_online is False:
             try:
                 self.get_spade_url(streamer)
@@ -203,6 +204,10 @@ class Twitch(object):
                 self.update_stream(streamer)
             except StreamerIsOfflineException:
                 streamer.set_offline()
+
+        # Trigger an immediate auto-redeem pass when streamer comes online.
+        if was_online is False and streamer.is_online is True:
+            streamer.auto_redeem_next_check_at = time.time()
 
     def get_channel_id(self, streamer_username):
         json_data = copy.deepcopy(GQLOperations.GetIDFromLogin)
@@ -777,6 +782,11 @@ class Twitch(object):
         ):
             return
 
+        # Auto-redeem should only run while streamer is online.
+        if streamer.is_online is not True:
+            streamer.auto_redeem_next_check_at = 0
+            return
+
         # Default to a periodic refresh for auto-redeem streamers.
         streamer.auto_redeem_next_check_at = time.time() + 60
 
@@ -868,7 +878,7 @@ class Twitch(object):
                 self.__schedule_auto_redeem_check(streamer, time.time() + 20)
 
     # Load the amount of current points for a channel, check if a bonus is available
-    def load_channel_points_context(self, streamer):
+    def load_channel_points_context(self, streamer, include_rewards=True):
         json_data = copy.deepcopy(GQLOperations.ChannelPointsContext)
         json_data["variables"] = {"channelLogin": streamer.username}
 
@@ -897,7 +907,8 @@ class Twitch(object):
             if streamer.settings.community_goals is True:
                 self.contribute_to_community_goals(streamer)
 
-            self.__handle_streamer_rewards(streamer, channel)
+            if include_rewards is True:
+                self.__handle_streamer_rewards(streamer, channel)
 
     def make_predictions(self, event):
         decision = event.bet.calculate(event.streamer.channel_points)
