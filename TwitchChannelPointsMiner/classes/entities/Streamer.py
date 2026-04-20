@@ -120,6 +120,7 @@ class Streamer(object):
         "streamer_url",
         "mutex",
         "auto_redeemed_rewards",
+        "auto_redeem_exhausted_rewards",
         "auto_redeem_next_check_at",
     ]
 
@@ -147,6 +148,7 @@ class Streamer(object):
 
         self.mutex = Lock()
         self.auto_redeemed_rewards = set()
+        self.auto_redeem_exhausted_rewards = set()
         self.auto_redeem_next_check_at = 0
 
     def __repr__(self):
@@ -163,6 +165,9 @@ class Streamer(object):
         if self.is_online is True:
             self.offline_at = time.time()
             self.is_online = False
+            # Reset stream-scoped auto-redeem state for next broadcast.
+            self.auto_redeem_exhausted_rewards.clear()
+            self.auto_redeem_next_check_at = 0
 
         self.toggle_chat()
 

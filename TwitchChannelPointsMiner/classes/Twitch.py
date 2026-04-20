@@ -700,6 +700,24 @@ class Twitch(object):
                 streamer.auto_redeem_next_check_at, timestamp
             )
 
+    def __is_reward_exhausted_for_current_stream(self, reward):
+        max_per_stream_setting = reward.get("maxPerStreamSetting") or {}
+        if (
+            isinstance(max_per_stream_setting, dict) is False
+            or max_per_stream_setting.get("isEnabled") is not True
+        ):
+            return False
+
+        try:
+            max_per_stream = int(max_per_stream_setting.get("maxPerStream") or 0)
+            redeemed_current_stream = int(
+                reward.get("redemptionsRedeemedCurrentStream") or 0
+            )
+        except (TypeError, ValueError):
+            return False
+
+        return max_per_stream > 0 and redeemed_current_stream >= max_per_stream
+
     def __redeem_custom_reward(self, streamer, reward, text_input=None):
         cost = self.__reward_cost(reward)
         if cost is None:
@@ -754,7 +772,7 @@ class Twitch(object):
         if not has_error:
             logger.info(
                 f"Auto redeemed reward '{reward.get('title')}' for {streamer}",
-                extra={"emoji": ":ticket:", "event": Events.GAIN_FOR_WATCH},
+                extra={"emoji": ":ticket:", "event": Events.REWARD_REDEEMED},
             )
             return True
 
@@ -765,7 +783,8 @@ class Twitch(object):
         )
         logger.warning(
             f"Failed to auto redeem reward '{reward.get('title')}' for {streamer}. "
-            f"error_code={error_code}, gql_errors={gql_errors}, response={response}"
+            f"error_code={error_code}, gql_errors={gql_errors}, response={response}",
+            extra={"emoji": ":warning:", "event": Events.REWARD_FAILED},
         )
         return False
 
@@ -849,7 +868,19 @@ class Twitch(object):
             ):
                 continue
 
+            if reward_id in streamer.auto_redeem_exhausted_rewards:
+                continue
+
             if reward.get("isInStock") is not True:
+                if self.__is_reward_exhausted_for_current_stream(reward):
+                    streamer.auto_redeem_exhausted_rewards.add(reward_id)
+                    logger.info(
+                        f"Skip auto redeem for {streamer}: '{reward.get('title')}' reached max-per-stream "
+                        f"({reward.get('redemptionsRedeemedCurrentStream')}/{(reward.get('maxPerStreamSetting') or {}).get('maxPerStream')}). "
+                        "Will retry next stream."
+                    )
+                    continue
+
                 cooldown_ts = self.__parse_twitch_timestamp(reward.get("cooldownExpiresAt"))
                 if cooldown_ts is not None:
                     # Re-check shortly after cooldown end.
@@ -857,7 +888,8 @@ class Twitch(object):
                 logger.info(
                     f"Skip auto redeem for {streamer}: '{reward.get('title')}' is out of stock "
                     f"(cooldownExpiresAt={reward.get('cooldownExpiresAt')}, "
-                    f"next_check_at={datetime.fromtimestamp(streamer.auto_redeem_next_check_at, timezone.utc).isoformat() if streamer.auto_redeem_next_check_at else None})"
+                    f"next_check_at={datetime.fromtimestamp(streamer.auto_redeem_next_check_at, timezone.utc).isoformat() if streamer.auto_redeem_next_check_at else None})",
+                    extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
                 )
                 continue
 

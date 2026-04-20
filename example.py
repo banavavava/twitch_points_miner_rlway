@@ -41,7 +41,7 @@ twitch_miner = TwitchChannelPointsMiner(
             chat_id=7160081907,                                                      # Chat ID to send messages @getmyid_bot
             token="8079715426:AAHnjQpEHRoEOmTDJKdjNYa6vhs2H_iQ-kQ",                          # Telegram API token @BotFather
             events=[Events.STREAMER_ONLINE, Events.STREAMER_OFFLINE,
-                    Events.BET_LOSE, Events.CHAT_MENTION, Events.BET_WIN, Events.BET_START, Events.BET_GENERAL, Events.BET_FAILED, Events.BET_REFUND],                          # Only these events will be sent to the chat
+                    Events.BET_LOSE, Events.CHAT_MENTION, Events.BET_WIN, Events.BET_START, Events.BET_GENERAL, Events.BET_FAILED, Events.BET_REFUND, Events.REWARD_REDEEMED, Events.REWARD_FAILED, Events.REWARD_SKIPPED],                          # Only these events will be sent to the chat
             disable_notification=True,                                              # Revoke the notification (sound/vibration)
         ),
     ),
