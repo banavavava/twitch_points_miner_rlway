@@ -877,7 +877,8 @@ class Twitch(object):
                     logger.info(
                         f"Skip auto redeem for {streamer}: '{reward.get('title')}' reached max-per-stream "
                         f"({reward.get('redemptionsRedeemedCurrentStream')}/{(reward.get('maxPerStreamSetting') or {}).get('maxPerStream')}). "
-                        "Will retry next stream."
+                        "Will retry next stream.",
+                        extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
                     )
                     continue
 
