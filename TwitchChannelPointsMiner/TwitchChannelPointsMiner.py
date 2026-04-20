@@ -70,6 +70,7 @@ class TwitchChannelPointsMiner:
         "original_streamers",
         "logs_file",
         "queue_listener",
+        "wakeup_event",
     ]
 
     def __init__(
@@ -160,6 +161,8 @@ class TwitchChannelPointsMiner:
         self.running = False
         self.start_datetime = None
         self.original_streamers = []
+        self.wakeup_event = threading.Event()
+        self.twitch.wake_main_loop = self.wakeup_event.set
 
         self.logs_file, self.queue_listener = configure_loggers(
             self.username, logger_settings
@@ -459,7 +462,8 @@ class TwitchChannelPointsMiner:
                 else:
                     sleep_for = default_sleep
 
-                time.sleep(sleep_for)
+                self.wakeup_event.wait(timeout=sleep_for)
+                self.wakeup_event.clear()
                 # Do an external control for WebSocket. Check if the thread is running
                 # Check if is not None because maybe we have already created a new connection on array+1 and now index is None
                 for index in range(0, len(self.ws_pool.ws)):
@@ -532,6 +536,7 @@ class TwitchChannelPointsMiner:
                     streamer.irc_chat.join()
 
         self.running = self.twitch.running = False
+        self.wakeup_event.set()
         if self.ws_pool is not None:
             self.ws_pool.end()
 
