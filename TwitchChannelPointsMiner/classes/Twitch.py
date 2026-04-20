@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from pathlib import Path
 from secrets import choice, token_hex
-from typing import Dict, Any
+from typing import Dict, Any, Callable, Optional
 # from urllib.parse import quote
 # from base64 import urlsafe_b64decode
 # from datetime import datetime
@@ -65,6 +65,7 @@ class Twitch(object):
         "client_session",
         "client_version",
         "twilight_build_id_pattern",
+        "wake_main_loop",
     ]
 
     def __init__(self, username, user_agent, password=None):
@@ -86,6 +87,7 @@ class Twitch(object):
         self.twilight_build_id_pattern = re.compile(
             r'window\.__twilightBuildID\s*=\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
         )
+        self.wake_main_loop: Optional[Callable[[], None]] = None
 
     def login(self):
         if not os.path.isfile(self.cookies_file):
@@ -208,6 +210,8 @@ class Twitch(object):
         # Trigger an immediate auto-redeem pass when streamer comes online.
         if was_online is False and streamer.is_online is True:
             streamer.auto_redeem_next_check_at = time.time()
+            if callable(self.wake_main_loop):
+                self.wake_main_loop()
 
     def get_channel_id(self, streamer_username):
         json_data = copy.deepcopy(GQLOperations.GetIDFromLogin)
