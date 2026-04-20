@@ -327,6 +327,21 @@ class TwitchChannelPointsMiner:
                     # followers will be tracked by pubsub shortly after startup.
                     if streamer.username in explicit_streamers_usernames:
                         self.twitch.check_streamer_online(streamer)
+                        # If streamer is already online and has auto-redeem targets,
+                        # run reward check immediately without waiting for the main loop.
+                        settings = streamer.settings
+                        if streamer.is_online and settings is not None:
+                            has_auto_redeem = (
+                                len(settings.auto_redeem_reward_ids or []) > 0
+                                or len(settings.auto_redeem_reward_titles or []) > 0
+                                or settings.fetch_rewards is True
+                            )
+                            if has_auto_redeem:
+                                self.twitch.load_channel_points_context(streamer)
+                                streamer.auto_redeem_next_check_at = 0
+                    else:
+                        # Keep startup status logs for non-explicit (followers) streamers too.
+                        self.twitch.check_streamer_online(streamer)
                     # self.twitch.viewer_is_mod(streamer)
                 except StreamerDoesNotExistException:
                     logger.info(
