@@ -98,8 +98,8 @@ class Twitch(object):
             self.twitch_login.set_token(self.twitch_login.get_auth_token())
 
     # === STREAMER / STREAM / INFO === #
-    def update_stream(self, streamer):
-        if streamer.stream.update_required() is True:
+    def update_stream(self, streamer, force=False):
+        if force is True or streamer.stream.update_required() is True:
             stream_info = self.get_stream_info(streamer)
             if stream_info is not None:
                 streamer.stream.update(
@@ -196,7 +196,9 @@ class Twitch(object):
         if streamer.is_online is False:
             try:
                 self.get_spade_url(streamer)
-                self.update_stream(streamer)
+                # Force a real live-status check when streamer is currently offline.
+                # Without this, a fresh cached stream snapshot may cause false online.
+                self.update_stream(streamer, force=True)
             except StreamerIsOfflineException:
                 streamer.set_offline()
             else:
