@@ -343,12 +343,12 @@ class TwitchChannelPointsMiner:
                                 f"[atomic] tick context for {streamer.username} "
                                 f"(online={streamer.is_online})"
                             )
-                            if streamer.is_online:
-                                self.twitch.load_channel_points_context(
-                                    streamer, include_rewards=False
-                                )
-                            else:
-                                self.twitch.check_streamer_online(streamer)
+                            # Always refresh points context for explicit streamers,
+                            # then verify live status.
+                            self.twitch.load_channel_points_context(
+                                streamer, include_rewards=False
+                            )
+                            self.twitch.check_streamer_online(streamer)
                             next_context_due = time.time() + interval
 
                         settings = streamer.settings
@@ -374,6 +374,8 @@ class TwitchChannelPointsMiner:
                                 self.twitch.load_channel_points_context(streamer)
                             else:
                                 self.twitch.check_streamer_online(streamer)
+                                if streamer.is_online:
+                                    self.twitch.load_channel_points_context(streamer)
 
                         due_times = [next_context_due]
                         if (
