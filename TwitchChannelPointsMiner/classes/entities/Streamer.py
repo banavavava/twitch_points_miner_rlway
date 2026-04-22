@@ -108,6 +108,7 @@ class Streamer(object):
         "stream_up",
         "online_at",
         "offline_at",
+        "offline_logged",
         "channel_points",
         "community_goals",
         "minute_watched_requests",
@@ -132,6 +133,7 @@ class Streamer(object):
         self.stream_up = 0
         self.online_at = 0
         self.offline_at = 0
+        self.offline_logged = False
         self.channel_points = 0
         self.community_goals = {}
         self.minute_watched_requests = None
@@ -165,24 +167,37 @@ class Streamer(object):
         if self.is_online is True:
             self.offline_at = time.time()
             self.is_online = False
+            self.offline_logged = True
             # Reset stream-scoped auto-redeem state for next broadcast.
             self.auto_redeem_exhausted_rewards.clear()
             self.auto_redeem_next_check_at = 0
+            self.toggle_chat()
 
-        self.toggle_chat()
-
-        logger.info(
-            f"{self} is Offline!",
-            extra={
-                "emoji": ":sleeping:",
-                "event": Events.STREAMER_OFFLINE,
-            },
-        )
+            logger.info(
+                f"{self} is Offline!",
+                extra={
+                    "emoji": ":sleeping:",
+                    "event": Events.STREAMER_OFFLINE,
+                },
+            )
+        elif self.offline_logged is False:
+            # Streamer starts in offline state; log it only once to avoid spam.
+            self.offline_at = time.time()
+            self.offline_logged = True
+            self.toggle_chat()
+            logger.info(
+                f"{self} is Offline!",
+                extra={
+                    "emoji": ":sleeping:",
+                    "event": Events.STREAMER_OFFLINE,
+                },
+            )
 
     def set_online(self):
         if self.is_online is False:
             self.online_at = time.time()
             self.is_online = True
+            self.offline_logged = False
             self.stream.init_watch_streak()
 
         self.toggle_chat()

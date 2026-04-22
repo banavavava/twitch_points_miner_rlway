@@ -266,7 +266,11 @@ class TwitchChannelPointsMiner:
                     extra={"emoji": ":clipboard:"},
                 )
                 for username in followers_array:
-                    if username not in streamers_dict and username not in blacklist:
+                    if (
+                        username not in explicit_streamers_usernames
+                        and username not in streamers_dict
+                        and username not in blacklist
+                    ):
                         streamers_name.append(username)
                         streamers_dict[username] = username.lower().strip()
                         streamer_context_interval[username] = 60
@@ -314,7 +318,96 @@ class TwitchChannelPointsMiner:
             # 1. Load channel points and auto-claim bonus
             # 2. Check if streamers are online
             # 3. DEACTIVATED: Check if the user is a moderator. (was used before the 5th of April 2021 to deactivate predictions)
+            explicit_streamers: list[Streamer] = []
+            explicit_streamers_seen: set[str] = set()
             for streamer in self.streamers:
+                if (
+                    streamer.username in explicit_streamers_usernames
+                    and streamer.username not in explicit_streamers_seen
+                ):
+                    explicit_streamers.append(streamer)
+                    explicit_streamers_seen.add(streamer.username)
+
+            def explicit_streamer_atomic_loop(streamer: Streamer, interval: int):
+                # Run immediately, then continue by per-streamer timer.
+                next_context_due = time.time()
+                logger.debug(
+                    f"[atomic] start checker for {streamer.username} interval={interval}s"
+                )
+                while self.running and self.twitch.running:
+                    try:
+                        now = time.time()
+
+                        if now >= next_context_due:
+                            logger.debug(
+                                f"[atomic] tick context for {streamer.username} "
+                                f"(online={streamer.is_online})"
+                            )
+                            if streamer.is_online:
+                                self.twitch.load_channel_points_context(
+                                    streamer, include_rewards=False
+                                )
+                            else:
+                                self.twitch.check_streamer_online(streamer)
+                            next_context_due = time.time() + interval
+
+                        settings = streamer.settings
+                        has_auto_redeem_targets = (
+                            settings is not None
+                            and (
+                                len(settings.auto_redeem_reward_ids or []) > 0
+                                or len(settings.auto_redeem_reward_titles or []) > 0
+                            )
+                        )
+                        if (
+                            has_auto_redeem_targets
+                            and streamer.auto_redeem_next_check_at != 0
+                            and time.time() >= streamer.auto_redeem_next_check_at
+                        ):
+                            logger.debug(
+                                f"[atomic] tick auto_redeem for {streamer.username} "
+                                f"(online={streamer.is_online})"
+                            )
+                            # Reset before request to avoid tight loops on failures.
+                            streamer.auto_redeem_next_check_at = 0
+                            if streamer.is_online:
+                                self.twitch.load_channel_points_context(streamer)
+                            else:
+                                self.twitch.check_streamer_online(streamer)
+
+                        due_times = [next_context_due]
+                        if (
+                            has_auto_redeem_targets
+                            and streamer.auto_redeem_next_check_at != 0
+                        ):
+                            due_times.append(streamer.auto_redeem_next_check_at)
+                        wait_for = max(0.25, min(2.0, min(due_times) - time.time()))
+                        time.sleep(wait_for)
+                    except Exception:
+                        logger.error(
+                            f"Exception raised in atomic checker for {streamer}",
+                            exc_info=True,
+                        )
+                        time.sleep(1)
+
+            for streamer in explicit_streamers:
+                interval = streamer_context_interval.get(streamer.username, 12)
+                checker_thread = threading.Thread(
+                    target=explicit_streamer_atomic_loop,
+                    args=(streamer, interval),
+                )
+                checker_thread.name = f"Atomic checker: {streamer.username}"
+                checker_thread.daemon = True
+                checker_thread.start()
+
+            if len(explicit_streamers) > 0:
+                logger.debug(
+                    f"[atomic] enabled checkers for {len(explicit_streamers)} explicit streamers"
+                )
+
+            for streamer in self.streamers:
+                if streamer.username in explicit_streamers_usernames:
+                    continue
                 interval = streamer_context_interval.get(streamer.username, 60)
                 startup_delay = (
                     random.uniform(0.05, 0.15)
@@ -448,6 +541,8 @@ class TwitchChannelPointsMiner:
                 default_sleep = random.uniform(20, 60)
                 next_due_times = []
                 for streamer in self.streamers:
+                    if streamer.username in explicit_streamers_usernames:
+                        continue
                     due_at = next_context_check_at.get(streamer.username, 0)
                     if due_at != 0:
                         next_due_times.append(due_at)
@@ -481,6 +576,8 @@ class TwitchChannelPointsMiner:
                     refresh_context = time.time()
                     for index in range(0, len(self.streamers)):
                         streamer = self.streamers[index]
+                        if streamer.username in explicit_streamers_usernames:
+                            continue
                         if streamer.is_online:
                             self.twitch.load_channel_points_context(
                                 streamer, include_rewards=False
@@ -490,6 +587,8 @@ class TwitchChannelPointsMiner:
                 else:
                     for index in range(0, len(self.streamers)):
                         streamer = self.streamers[index]
+                        if streamer.username in explicit_streamers_usernames:
+                            continue
                         settings = streamer.settings
                         if settings is None:
                             continue
@@ -497,9 +596,7 @@ class TwitchChannelPointsMiner:
                             len(settings.auto_redeem_reward_ids or []) > 0
                             or len(settings.auto_redeem_reward_titles or []) > 0
                         )
-                        # Dynamic context refresh cadence:
-                        # - explicit streamers from .mine(...) every 12s
-                        # - followers-discovered streamers every 60s
+                        # Followers keep the regular context refresh cadence.
                         due_at = next_context_check_at.get(streamer.username, 0)
                         if due_at != 0 and time.time() >= due_at:
                             self.twitch.load_channel_points_context(
@@ -510,7 +607,8 @@ class TwitchChannelPointsMiner:
 
                         if (
                             streamer.is_online
-                            and has_auto_redeem_targets
+                            and
+                            has_auto_redeem_targets
                             and streamer.auto_redeem_next_check_at != 0
                             and time.time() >= streamer.auto_redeem_next_check_at
                         ):
