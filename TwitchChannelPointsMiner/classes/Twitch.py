@@ -214,7 +214,7 @@ class Twitch(object):
 
         # Trigger an immediate auto-redeem pass when streamer comes online.
         if was_online is False and streamer.is_online is True:
-            streamer.auto_redeemed_rewards.clear()
+            streamer.reset_auto_redeem_stream_state(clear_cache=False)
             streamer.auto_redeem_next_check_at = time.time()
             if callable(self.wake_main_loop):
                 self.wake_main_loop()
@@ -1029,7 +1029,7 @@ class Twitch(object):
             streamer.is_fast_auto_redeem_mode()
             and streamer.is_online is not True
             and any(
-                self.__is_reward_max_per_stream_enabled(reward) is False
+                self.__is_reward_max_per_stream_enabled(reward) is True
                 for reward in cached_rewards
             )
         )
@@ -1045,7 +1045,7 @@ class Twitch(object):
             cached_rewards = [
                 reward
                 for reward in cached_rewards
-                if self.__is_reward_max_per_stream_enabled(reward) is False
+                if self.__is_reward_max_per_stream_enabled(reward) is True
             ]
 
         poll_interval = 3
@@ -1203,7 +1203,8 @@ class Twitch(object):
                 error_codes_seen.add(error_code)
 
             if (
-                is_max_per_stream_reward
+                streamer.is_online is True
+                and is_max_per_stream_reward
                 and error_code in exhausted_codes
                 and reward_id
             ):
@@ -1224,7 +1225,8 @@ class Twitch(object):
                     pretty_skip_logged = True
 
             if (
-                is_max_per_stream_reward
+                streamer.is_online is True
+                and is_max_per_stream_reward
                 and error_code in unavailable_codes
             ):
                 max_unavailable_attempts += 1
@@ -1242,7 +1244,8 @@ class Twitch(object):
                     min_non_max_next_due = next_due
 
         should_stop_cycle = (
-            has_non_max_targets is False
+            offline_cached_mode is False
+            and has_non_max_targets is False
             and (
                 max_eligible_targets == 0
                 or (

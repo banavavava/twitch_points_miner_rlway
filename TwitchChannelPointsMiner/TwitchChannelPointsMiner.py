@@ -360,23 +360,21 @@ class TwitchChannelPointsMiner:
                             next_context_due = time.time() + interval
 
                         has_auto_redeem_targets = streamer.has_auto_redeem_targets()
+
                         if (
                             fast_silent_redeem_mode
                             and has_auto_redeem_targets
                             and streamer.auto_redeem_next_check_at == 0
                         ):
-                            has_cached_offline_repeat_rewards = any(
-                                (
-                                    isinstance((reward.get("maxPerStreamSetting") or {}), dict)
-                                    is False
-                                )
-                                or (reward.get("maxPerStreamSetting") or {}).get("isEnabled") is not True
-                                or int((reward.get("maxPerStreamSetting") or {}).get("maxPerStream") or 0) <= 0
+                            has_cached_offline_rewards = any(
+                                isinstance(reward.get("maxPerStreamSetting"), dict)
+                                and reward.get("maxPerStreamSetting", {}).get("isEnabled") is True
+                                and int(reward.get("maxPerStreamSetting", {}).get("maxPerStream") or 0) > 0
                                 for reward in (streamer.auto_redeem_cached_rewards or [])
                             )
                             if (
                                 streamer.is_online is not True
-                                and has_cached_offline_repeat_rewards
+                                and has_cached_offline_rewards
                             ):
                                 streamer.auto_redeem_next_check_at = time.time()
 
