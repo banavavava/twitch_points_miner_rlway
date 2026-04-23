@@ -1029,7 +1029,7 @@ class Twitch(object):
             streamer.is_fast_auto_redeem_mode()
             and streamer.is_online is not True
             and any(
-                self.__is_reward_max_per_stream_enabled(reward)
+                self.__is_reward_max_per_stream_enabled(reward) is False
                 for reward in cached_rewards
             )
         )
@@ -1045,7 +1045,7 @@ class Twitch(object):
             cached_rewards = [
                 reward
                 for reward in cached_rewards
-                if self.__is_reward_max_per_stream_enabled(reward)
+                if self.__is_reward_max_per_stream_enabled(reward) is False
             ]
 
         poll_interval = 3

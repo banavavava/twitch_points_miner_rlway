@@ -365,15 +365,18 @@ class TwitchChannelPointsMiner:
                             and has_auto_redeem_targets
                             and streamer.auto_redeem_next_check_at == 0
                         ):
-                            has_cached_max_per_stream_rewards = any(
-                                isinstance((reward.get("maxPerStreamSetting") or {}), dict)
-                                and (reward.get("maxPerStreamSetting") or {}).get("isEnabled") is True
-                                and int((reward.get("maxPerStreamSetting") or {}).get("maxPerStream") or 0) > 0
+                            has_cached_offline_repeat_rewards = any(
+                                (
+                                    isinstance((reward.get("maxPerStreamSetting") or {}), dict)
+                                    is False
+                                )
+                                or (reward.get("maxPerStreamSetting") or {}).get("isEnabled") is not True
+                                or int((reward.get("maxPerStreamSetting") or {}).get("maxPerStream") or 0) <= 0
                                 for reward in (streamer.auto_redeem_cached_rewards or [])
                             )
                             if (
                                 streamer.is_online is not True
-                                and has_cached_max_per_stream_rewards
+                                and has_cached_offline_repeat_rewards
                             ):
                                 streamer.auto_redeem_next_check_at = time.time()
 
