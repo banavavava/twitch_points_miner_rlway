@@ -362,14 +362,20 @@ class TwitchChannelPointsMiner:
                         has_auto_redeem_targets = streamer.has_auto_redeem_targets()
                         if (
                             fast_silent_redeem_mode
-                            and streamer.is_online is True
                             and has_auto_redeem_targets
                             and streamer.auto_redeem_next_check_at == 0
                         ):
-                            streamer.auto_redeem_next_check_at = time.time() + 3
+                            has_cached_max_per_stream_rewards = any(
+                                isinstance((reward.get("maxPerStreamSetting") or {}), dict)
+                                and (reward.get("maxPerStreamSetting") or {}).get("isEnabled") is True
+                                and int((reward.get("maxPerStreamSetting") or {}).get("maxPerStream") or 0) > 0
+                                for reward in (streamer.auto_redeem_cached_rewards or [])
+                            )
+                            if streamer.is_online is True or has_cached_max_per_stream_rewards:
+                                streamer.auto_redeem_next_check_at = time.time()
+
                         if (
                             has_auto_redeem_targets
-                            and (fast_silent_redeem_mode is False or streamer.is_online)
                             and streamer.auto_redeem_next_check_at != 0
                             and time.time() >= streamer.auto_redeem_next_check_at
                         ):
@@ -381,7 +387,13 @@ class TwitchChannelPointsMiner:
                             # Reset before request to avoid tight loops on failures.
                             streamer.auto_redeem_next_check_at = 0
                             if fast_silent_redeem_mode:
-                                self.twitch.fast_auto_redeem_tick(streamer, trigger="periodic")
+                                trigger = (
+                                    "online_transition"
+                                    if streamer.is_online is True
+                                    and len(streamer.auto_redeemed_rewards) == 0
+                                    else "periodic"
+                                )
+                                self.twitch.fast_auto_redeem_tick(streamer, trigger=trigger)
                             elif streamer.is_online:
                                 self.twitch.load_channel_points_context(streamer)
                             else:

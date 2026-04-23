@@ -201,9 +201,11 @@ class Streamer(object):
             self.is_online = False
             self.offline_logged = True
             # Reset stream-scoped auto-redeem state for next broadcast.
-            # Cached rewards for fast auto-redeem must also be refreshed on the next
-            # stream, otherwise cooldown/stock metadata can become stale.
-            self.reset_auto_redeem_stream_state(clear_cache=True)
+            # Keep the fast auto-redeem cache across offline transitions so the
+            # atomic 3-second loop can keep attempting cached rewards while
+            # live-status detection catches up. The cache is refreshed by the
+            # explicit streamer checker on its next context tick.
+            self.reset_auto_redeem_stream_state(clear_cache=False)
             self.toggle_chat()
 
             logger.info(

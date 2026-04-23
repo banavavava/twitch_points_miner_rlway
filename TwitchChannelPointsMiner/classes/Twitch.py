@@ -1024,14 +1024,31 @@ class Twitch(object):
                 )
             return
 
-        if streamer.is_online is not True:
+        cached_rewards = streamer.auto_redeem_cached_rewards or []
+        offline_cached_mode = (
+            streamer.is_fast_auto_redeem_mode()
+            and streamer.is_online is not True
+            and any(
+                self.__is_reward_max_per_stream_enabled(reward)
+                for reward in cached_rewards
+            )
+        )
+
+        if streamer.is_online is not True and offline_cached_mode is False:
             streamer.auto_redeem_next_check_at = 0
             return
 
-        self.prime_auto_redeem_cache(streamer)
+        if streamer.is_online is True:
+            self.prime_auto_redeem_cache(streamer)
+            cached_rewards = streamer.auto_redeem_cached_rewards or []
+        elif offline_cached_mode:
+            cached_rewards = [
+                reward
+                for reward in cached_rewards
+                if self.__is_reward_max_per_stream_enabled(reward)
+            ]
 
         poll_interval = 3
-        cached_rewards = streamer.auto_redeem_cached_rewards or []
         if len(cached_rewards) == 0:
             streamer.auto_redeem_next_check_at = 0
             if online_transition_mode:
@@ -1188,7 +1205,6 @@ class Twitch(object):
             if (
                 is_max_per_stream_reward
                 and error_code in exhausted_codes
-                and streamer.is_online
                 and reward_id
             ):
                 if reward_id not in streamer.auto_redeem_exhausted_rewards:
@@ -1209,7 +1225,6 @@ class Twitch(object):
 
             if (
                 is_max_per_stream_reward
-                and streamer.is_online
                 and error_code in unavailable_codes
             ):
                 max_unavailable_attempts += 1
@@ -1226,9 +1241,8 @@ class Twitch(object):
                 if min_non_max_next_due is None or next_due < min_non_max_next_due:
                     min_non_max_next_due = next_due
 
-        should_stop_online_cycle = (
-            streamer.is_online
-            and has_non_max_targets is False
+        should_stop_cycle = (
+            has_non_max_targets is False
             and (
                 max_eligible_targets == 0
                 or (
@@ -1237,10 +1251,10 @@ class Twitch(object):
                 )
             )
         )
-        if should_stop_online_cycle:
+        if should_stop_cycle:
             streamer.auto_redeem_next_check_at = 0
             logger.info(
-                f"[auto-redeem] streamer={streamer.username} stop online cycle "
+                f"[auto-redeem] streamer={streamer.username} stop {'offline cached' if offline_cached_mode else 'online'} cycle "
                 f"attempted={attempted_targets} redeemed={redeemed_targets} "
                 f"errors={sorted(error_codes_seen) if len(error_codes_seen) > 0 else []}"
             )

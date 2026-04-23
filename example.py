@@ -126,7 +126,7 @@ twitch_miner.mine(
                 community_goals=False,
                 fetch_rewards=False,                       # Quiet mode for fast auto-redeem
                 auto_redeem_reward_ids=[],                 # Optional direct IDs (can stay empty)
-                auto_redeem_reward_titles=["stay hydrated!"],  # You can use full or partial title
+                auto_redeem_reward_titles=["First!"],  # You can use full or partial title
                 auto_redeem_text="",
                 auto_redeem_repeat=True,                   # Redeem again automatically when cooldown ends
                 bet=BetSettings(
