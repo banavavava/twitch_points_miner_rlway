@@ -371,7 +371,10 @@ class TwitchChannelPointsMiner:
                                 and int((reward.get("maxPerStreamSetting") or {}).get("maxPerStream") or 0) > 0
                                 for reward in (streamer.auto_redeem_cached_rewards or [])
                             )
-                            if streamer.is_online is True or has_cached_max_per_stream_rewards:
+                            if (
+                                streamer.is_online is not True
+                                and has_cached_max_per_stream_rewards
+                            ):
                                 streamer.auto_redeem_next_check_at = time.time()
 
                         if (
