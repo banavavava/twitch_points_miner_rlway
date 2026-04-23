@@ -88,6 +88,17 @@ class StreamerSettings(object):
         if self.auto_redeem_repeat is None:
             self.auto_redeem_repeat = False
 
+    def normalized_auto_redeem_reward_titles(self) -> List[str]:
+        reward_titles = self.auto_redeem_reward_titles
+        if isinstance(reward_titles, str):
+            return [reward_titles]
+        return reward_titles or []
+
+    def has_auto_redeem_targets(self) -> bool:
+        return bool(
+            self.auto_redeem_reward_ids or self.normalized_auto_redeem_reward_titles()
+        )
+
     def __repr__(self):
         return (
             f"BetSettings(make_predictions={self.make_predictions}, follow_raid={self.follow_raid}, "
@@ -123,6 +134,9 @@ class Streamer(object):
         "auto_redeemed_rewards",
         "auto_redeem_exhausted_rewards",
         "auto_redeem_next_check_at",
+        "auto_redeem_cached_rewards",
+        "auto_redeem_cache_ready",
+        "auto_redeem_non_max_next_attempts",
     ]
 
     def __init__(self, username, settings: Optional[StreamerSettings] = None):
@@ -151,7 +165,10 @@ class Streamer(object):
         self.mutex = Lock()
         self.auto_redeemed_rewards = set()
         self.auto_redeem_exhausted_rewards = set()
-        self.auto_redeem_next_check_at = 0
+        self.auto_redeem_next_check_at: float = 0.0
+        self.auto_redeem_cached_rewards = []
+        self.auto_redeem_cache_ready = False
+        self.auto_redeem_non_max_next_attempts = {}
 
     def __repr__(self):
         return f"Streamer(username={self.username}, channel_id={self.channel_id}, channel_points={_millify(self.channel_points)})"
@@ -163,14 +180,30 @@ class Streamer(object):
             else self.__repr__()
         )
 
+    def is_fast_auto_redeem_mode(self) -> bool:
+        return self.username == "saintsakura"
+
+    def has_auto_redeem_targets(self) -> bool:
+        return self.settings is not None and self.settings.has_auto_redeem_targets()
+
+    def reset_auto_redeem_stream_state(self, clear_cache: bool = False):
+        self.auto_redeemed_rewards.clear()
+        self.auto_redeem_exhausted_rewards.clear()
+        self.auto_redeem_next_check_at = 0.0
+        self.auto_redeem_non_max_next_attempts.clear()
+        if clear_cache:
+            self.auto_redeem_cache_ready = False
+            self.auto_redeem_cached_rewards = []
+
     def set_offline(self):
         if self.is_online is True:
             self.offline_at = time.time()
             self.is_online = False
             self.offline_logged = True
             # Reset stream-scoped auto-redeem state for next broadcast.
-            self.auto_redeem_exhausted_rewards.clear()
-            self.auto_redeem_next_check_at = 0
+            # Cached rewards for fast auto-redeem must also be refreshed on the next
+            # stream, otherwise cooldown/stock metadata can become stale.
+            self.reset_auto_redeem_stream_state(clear_cache=True)
             self.toggle_chat()
 
             logger.info(
@@ -358,4 +391,4 @@ class Streamer(object):
         self.community_goals[community_goal.goal_id] = community_goal
 
     def delete_community_goal(self, goal_id):
-        self.community_goals.pop(goal_id)
+        self.community_goals.pop(goal_id, None)

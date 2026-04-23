@@ -189,7 +189,10 @@ class Twitch(object):
                 return response["data"]["user"]
 
     def check_streamer_online(self, streamer):
-        if time.time() < streamer.offline_at + 60:
+        offline_recheck_delay = (
+            4 if streamer.username == "saintsakura" else 60
+        )
+        if time.time() < streamer.offline_at + offline_recheck_delay:
             return
 
         was_online = streamer.is_online
@@ -211,6 +214,7 @@ class Twitch(object):
 
         # Trigger an immediate auto-redeem pass when streamer comes online.
         if was_online is False and streamer.is_online is True:
+            streamer.auto_redeemed_rewards.clear()
             streamer.auto_redeem_next_check_at = time.time()
             if callable(self.wake_main_loop):
                 self.wake_main_loop()
@@ -706,6 +710,187 @@ class Twitch(object):
                 streamer.auto_redeem_next_check_at, timestamp
             )
 
+    def __has_auto_redeem_targets(self, settings):
+        return settings is not None and settings.has_auto_redeem_targets()
+
+    def __resolve_auto_redeem_targets(self, settings, custom_rewards):
+        redeem_titles = settings.normalized_auto_redeem_reward_titles()
+
+        by_id = {
+            reward.get("id"): reward
+            for reward in custom_rewards
+            if reward.get("id") is not None
+        }
+        by_title_exact = {
+            (reward.get("title") or "").strip().lower(): reward
+            for reward in custom_rewards
+        }
+
+        targets = []
+        for reward_id in settings.auto_redeem_reward_ids:
+            reward = by_id.get(reward_id)
+            if reward is not None:
+                targets.append(reward)
+
+        for reward_title in redeem_titles:
+            normalized_title = (reward_title or "").strip().lower()
+            if normalized_title == "":
+                continue
+
+            reward = by_title_exact.get(normalized_title)
+            if reward is not None:
+                targets.append(reward)
+                continue
+
+            for candidate in custom_rewards:
+                candidate_title = (candidate.get("title") or "").strip().lower()
+                if normalized_title in candidate_title:
+                    targets.append(candidate)
+                    break
+
+        deduped = []
+        seen = set()
+        for reward in targets:
+            reward_id = reward.get("id")
+            if reward_id in seen:
+                continue
+            seen.add(reward_id)
+            deduped.append(reward)
+        return deduped
+
+    def __is_reward_max_per_stream_enabled(self, reward):
+        max_per_stream_setting = reward.get("maxPerStreamSetting") or {}
+        if (
+            isinstance(max_per_stream_setting, dict) is False
+            or max_per_stream_setting.get("isEnabled") is not True
+        ):
+            return False
+        try:
+            return int(max_per_stream_setting.get("maxPerStream") or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def __reward_cooldown_seconds(self, reward):
+        cooldown_setting = reward.get("globalCooldownSetting") or {}
+        if (
+            isinstance(cooldown_setting, dict) is False
+            or cooldown_setting.get("isEnabled") is not True
+        ):
+            return 60
+        try:
+            seconds = int(cooldown_setting.get("globalCooldownSeconds") or 0)
+            return seconds if seconds > 0 else 60
+        except (TypeError, ValueError):
+            return 60
+
+    def __auto_redeem_reward_label(self, reward):
+        return (
+            f"title='{reward.get('title')}' "
+            f"id={reward.get('id')} cost={self.__reward_cost(reward)}"
+        )
+
+    def __log_auto_redeem_info(self, streamer, reward, message):
+        logger.info(
+            f"[auto-redeem] streamer={streamer.username} "
+            f"{self.__auto_redeem_reward_label(reward)} :: {message}"
+        )
+
+    def __log_auto_redeem_debug(self, streamer, reward, message):
+        logger.debug(
+            f"[auto-redeem][debug] streamer={streamer.username} "
+            f"title={reward.get('title')} "
+            f"id={reward.get('id')} "
+            f"cost={self.__reward_cost(reward)} "
+            f"in_stock={reward.get('isInStock')} "
+            f"cooldown_expires_at={reward.get('cooldownExpiresAt')} "
+            f"cooldown_seconds={reward.get('cooldownSeconds')} "
+            f"max_per_stream={((reward.get('maxPerStreamSetting') or {}).get('maxPerStream'))} "
+            f"redeemed_this_stream={reward.get('redemptionsRedeemedCurrentStream')} "
+            f"next_check_at={streamer.auto_redeem_next_check_at} "
+            f"non_max_next_attempt={streamer.auto_redeem_non_max_next_attempts.get(reward.get('id'))} "
+            f":: {message}"
+        )
+
+    def prime_auto_redeem_cache(self, streamer):
+        streamer.auto_redeem_cache_ready = True
+        existing_non_max_next_attempts = dict(streamer.auto_redeem_non_max_next_attempts)
+        streamer.auto_redeem_cached_rewards = []
+
+        settings = streamer.settings
+        if not self.__has_auto_redeem_targets(settings):
+            return
+
+        json_data = copy.deepcopy(GQLOperations.ChannelPointsContext)
+        json_data["variables"] = {"channelLogin": streamer.username}
+        response = self.post_gql_request(json_data)
+        if response == {}:
+            return
+        if response["data"]["community"] is None:
+            raise StreamerDoesNotExistException
+
+        channel = response["data"]["community"]["channel"]
+        community_points = channel["self"]["communityPoints"]
+        streamer.channel_points = community_points["balance"]
+        streamer.activeMultipliers = community_points["activeMultipliers"]
+
+        if community_points["availableClaim"] is not None:
+            self.claim_bonus(streamer, community_points["availableClaim"]["id"])
+
+        cps = channel.get("communityPointsSettings", {})
+        custom_rewards = cps.get("customRewards", []) if cps else []
+        targets = self.__resolve_auto_redeem_targets(settings, custom_rewards)
+        logger.debug(
+            f"[auto-redeem][debug] streamer={streamer.username} "
+            f"cache refresh resolved {len(targets)} target reward(s)"
+        )
+
+        cached_rewards = []
+        current_reward_ids = set()
+        for reward in targets:
+            reward_id = reward.get("id")
+            if reward_id is None:
+                continue
+            current_reward_ids.add(reward_id)
+            cooldown_seconds = self.__reward_cooldown_seconds(reward)
+            cached_reward = {
+                "id": reward_id,
+                "title": reward.get("title"),
+                "cost": reward.get("cost"),
+                "defaultCost": reward.get("defaultCost"),
+                "pricingType": reward.get("pricingType"),
+                "prompt": reward.get("prompt"),
+                "isUserInputRequired": reward.get("isUserInputRequired"),
+                "maxPerStreamSetting": reward.get("maxPerStreamSetting"),
+                "redemptionsRedeemedCurrentStream": reward.get("redemptionsRedeemedCurrentStream"),
+                "globalCooldownSetting": reward.get("globalCooldownSetting"),
+                "cooldownExpiresAt": reward.get("cooldownExpiresAt"),
+                "cooldownSeconds": cooldown_seconds,
+                "isInStock": reward.get("isInStock"),
+            }
+            cached_rewards.append(cached_reward)
+            self.__log_auto_redeem_debug(
+                streamer, cached_reward, "reward added to fast auto-redeem cache"
+            )
+
+            if (
+                streamer.username == "saintsakura"
+                and self.__is_reward_max_per_stream_enabled(reward) is False
+                and reward_id not in existing_non_max_next_attempts
+            ):
+                cooldown_ts = self.__parse_twitch_timestamp(reward.get("cooldownExpiresAt"))
+                if cooldown_ts is not None:
+                    # Use Twitch cooldown boundary directly (do not add extra full cooldown).
+                    existing_non_max_next_attempts[reward_id] = cooldown_ts + 1
+                elif reward.get("isInStock") is not True:
+                    existing_non_max_next_attempts[reward_id] = time.time() + cooldown_seconds
+
+        streamer.auto_redeem_non_max_next_attempts = {
+            reward_id: next_due
+            for reward_id, next_due in existing_non_max_next_attempts.items()
+            if reward_id in current_reward_ids
+        }
+        streamer.auto_redeem_cached_rewards = cached_rewards
+
     def __is_reward_exhausted_for_current_stream(self, reward):
         max_per_stream_setting = reward.get("maxPerStreamSetting") or {}
         if (
@@ -725,12 +910,14 @@ class Twitch(object):
         return max_per_stream > 0 and redeemed_current_stream >= max_per_stream
 
     def __redeem_custom_reward(self, streamer, reward, text_input=None):
+        silent_fast_mode = streamer.username == "saintsakura"
         cost = self.__reward_cost(reward)
         if cost is None:
-            logger.warning(
-                f"Skip redeem for {streamer} reward {reward.get('id')}: missing cost"
-            )
-            return False
+            if not silent_fast_mode:
+                logger.warning(
+                    f"Skip redeem for {streamer} reward {reward.get('id')}: missing cost"
+                )
+            return False, "MISSING_COST"
 
         json_data = copy.deepcopy(GQLOperations.RedeemCustomReward)
         json_data["variables"] = {
@@ -749,21 +936,38 @@ class Twitch(object):
         if text_input and reward.get("isUserInputRequired") is True:
             json_data["variables"]["input"]["textInput"] = text_input
         elif text_input and reward.get("isUserInputRequired") is not True:
-            logger.debug(
-                "Skip textInput for reward '%s' (%s): isUserInputRequired=%s",
-                reward.get("title"),
-                reward.get("id"),
-                reward.get("isUserInputRequired"),
-            )
+            if not silent_fast_mode:
+                logger.debug(
+                    "Skip textInput for reward '%s' (%s): isUserInputRequired=%s",
+                    reward.get("title"),
+                    reward.get("id"),
+                    reward.get("isUserInputRequired"),
+                )
 
-        response = self.post_gql_request(json_data)
         logger.debug(
-            "RedeemCustomReward response for '%s' (%s): input=%s response=%s",
+            "[auto-redeem][debug] streamer=%s title=%s id=%s redeem request input=%s",
+            streamer.username,
             reward.get("title"),
             reward.get("id"),
             json.dumps(json_data.get("variables", {}).get("input", {}), ensure_ascii=False),
+        )
+
+        response = self.post_gql_request(json_data)
+        logger.debug(
+            "[auto-redeem][debug] streamer=%s title=%s id=%s redeem response=%s",
+            streamer.username,
+            reward.get("title"),
+            reward.get("id"),
             json.dumps(response, ensure_ascii=False),
         )
+        if not silent_fast_mode:
+            logger.debug(
+                "RedeemCustomReward response for '%s' (%s): input=%s response=%s",
+                reward.get("title"),
+                reward.get("id"),
+                json.dumps(json_data.get("variables", {}).get("input", {}), ensure_ascii=False),
+                json.dumps(response, ensure_ascii=False),
+            )
 
         gql_errors = response.get("errors")
         payload = (
@@ -776,26 +980,315 @@ class Twitch(object):
         # Twitch may return HTTP 200 with business error inside payload.error.
         has_error = bool(gql_errors) or (payload_error is not None)
         if not has_error:
+            self.__log_auto_redeem_info(streamer, reward, "redeem succeeded")
             logger.info(
                 f"Auto redeemed reward '{reward.get('title')}' for {streamer}",
                 extra={"emoji": ":ticket:", "event": Events.REWARD_REDEEMED},
             )
-            return True
+            return True, None
 
         error_code = (
             payload_error.get("code")
             if isinstance(payload_error, dict)
             else None
         )
-        logger.warning(
-            f"Failed to auto redeem reward '{reward.get('title')}' for {streamer}. "
-            f"error_code={error_code}, gql_errors={gql_errors}, response={response}",
-            extra={"emoji": ":warning:", "event": Events.REWARD_FAILED},
+        self.__log_auto_redeem_info(
+            streamer,
+            reward,
+            f"redeem failed error_code={error_code} gql_errors={gql_errors}",
         )
-        return False
+        self.__log_auto_redeem_debug(
+            streamer,
+            reward,
+            f"redeem failed full_response={json.dumps(response, ensure_ascii=False)}",
+        )
+        if not silent_fast_mode:
+            logger.warning(
+                f"Failed to auto redeem reward '{reward.get('title')}' for {streamer}. "
+                f"error_code={error_code}, gql_errors={gql_errors}, response={response}",
+                extra={"emoji": ":warning:", "event": Events.REWARD_FAILED},
+            )
+        if error_code is None and gql_errors:
+            return False, "GQL_ERROR"
+        return False, error_code
+
+    def fast_auto_redeem_tick(self, streamer, trigger="periodic"):
+        online_transition_mode = trigger == "online_transition"
+        settings = streamer.settings
+        if settings is None:
+            streamer.auto_redeem_next_check_at = 0
+            if online_transition_mode:
+                logger.info(
+                    f"[auto-redeem] {streamer.username} online trigger: skipped (missing settings)",
+                    extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
+                )
+            return
+
+        if streamer.is_online is not True:
+            streamer.auto_redeem_next_check_at = 0
+            return
+
+        self.prime_auto_redeem_cache(streamer)
+
+        poll_interval = 3
+        cached_rewards = streamer.auto_redeem_cached_rewards or []
+        if len(cached_rewards) == 0:
+            streamer.auto_redeem_next_check_at = 0
+            if online_transition_mode:
+                logger.info(
+                    f"[auto-redeem] {streamer.username} online trigger: no cached targets",
+                    extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
+                )
+            return
+
+        unavailable_codes = {
+            "CUSTOM_REWARD_NOT_FOUND",
+            "CUSTOM_REWARD_NOT_ENABLED",
+            "CUSTOM_REWARD_NOT_IN_STOCK",
+            "MAX_PER_STREAM",
+            "MAX_PER_USER_PER_STREAM",
+            "MAX_PER_USER_PER_DAY",
+            "MAX_GLOBAL_REDEMPTIONS",
+            "MAX_PER_STREAM_REACHED",
+            "MAX_PER_USER_PER_STREAM_REACHED",
+            "MAX_PER_USER_PER_DAY_REACHED",
+            "MAX_GLOBAL_REDEMPTIONS_REACHED",
+        }
+        exhausted_codes = {
+            "MAX_PER_STREAM",
+            "MAX_PER_USER_PER_STREAM",
+            "MAX_GLOBAL_REDEMPTIONS",
+            "MAX_PER_STREAM_REACHED",
+            "MAX_PER_USER_PER_STREAM_REACHED",
+            "MAX_GLOBAL_REDEMPTIONS_REACHED",
+        }
+
+        has_max_targets = False
+        has_non_max_targets = False
+        max_eligible_targets = 0
+        max_attempted_targets = 0
+        max_unavailable_attempts = 0
+        min_non_max_next_due = None
+        attempted_targets = 0
+        redeemed_targets = 0
+        error_codes_seen = set()
+        pretty_skip_logged = False
+
+        for reward in cached_rewards:
+            reward_id = reward.get("id")
+            is_max_per_stream_reward = self.__is_reward_max_per_stream_enabled(reward)
+            self.__log_auto_redeem_debug(
+                streamer,
+                reward,
+                (
+                    f"evaluate reward trigger={trigger} "
+                    f"is_max_per_stream={is_max_per_stream_reward} "
+                    f"channel_points={streamer.channel_points} "
+                    f"already_redeemed={reward_id in streamer.auto_redeemed_rewards} "
+                    f"already_exhausted={reward_id in streamer.auto_redeem_exhausted_rewards}"
+                ),
+            )
+
+            if is_max_per_stream_reward:
+                has_max_targets = True
+            else:
+                has_non_max_targets = True
+
+            if is_max_per_stream_reward is False:
+                next_allowed_at = streamer.auto_redeem_non_max_next_attempts.get(
+                    reward_id
+                )
+                if next_allowed_at is None:
+                    cooldown_ts = self.__parse_twitch_timestamp(
+                        reward.get("cooldownExpiresAt")
+                    )
+                    if cooldown_ts is not None:
+                        seed_due = cooldown_ts + 1
+                    else:
+                        seed_due = time.time() + int(
+                            reward.get("cooldownSeconds") or 60
+                        )
+                    streamer.auto_redeem_non_max_next_attempts[reward_id] = seed_due
+                    self.__log_auto_redeem_info(
+                        streamer,
+                        reward,
+                        f"waiting for first eligible redeem time until {seed_due:.0f}",
+                    )
+                    if min_non_max_next_due is None or seed_due < min_non_max_next_due:
+                        min_non_max_next_due = seed_due
+                    continue
+
+                if time.time() < next_allowed_at:
+                    if (
+                        min_non_max_next_due is None
+                        or next_allowed_at < min_non_max_next_due
+                    ):
+                        min_non_max_next_due = next_allowed_at
+                    self.__log_auto_redeem_debug(
+                        streamer,
+                        reward,
+                        f"skip: cooldown gate active for {round(next_allowed_at - time.time(), 2)}s",
+                    )
+                    continue
+
+            if (
+                settings.auto_redeem_repeat is not True
+                and reward_id in streamer.auto_redeemed_rewards
+            ):
+                self.__log_auto_redeem_debug(
+                    streamer, reward, "skip: already redeemed in this stream"
+                )
+                continue
+
+            if reward_id in streamer.auto_redeem_exhausted_rewards:
+                self.__log_auto_redeem_debug(
+                    streamer, reward, "skip: reward marked exhausted for this stream"
+                )
+                continue
+
+            if is_max_per_stream_reward:
+                max_eligible_targets += 1
+
+            if streamer.channel_points < int(self.__reward_cost(reward) or 0):
+                self.__log_auto_redeem_info(
+                    streamer,
+                    reward,
+                    f"skip: not enough points have={streamer.channel_points} need={int(self.__reward_cost(reward) or 0)}",
+                )
+                if is_max_per_stream_reward is False and reward_id is not None:
+                    next_due = time.time() + 60
+                    streamer.auto_redeem_non_max_next_attempts[reward_id] = next_due
+                    if min_non_max_next_due is None or next_due < min_non_max_next_due:
+                        min_non_max_next_due = next_due
+                continue
+
+            self.__log_auto_redeem_info(streamer, reward, "attempt redeem")
+            attempted_targets += 1
+            if is_max_per_stream_reward:
+                max_attempted_targets += 1
+
+            redeemed, error_code = self.__redeem_custom_reward(
+                streamer, reward, text_input=settings.auto_redeem_text
+            )
+            if redeemed is True:
+                redeemed_targets += 1
+                if settings.auto_redeem_repeat is not True:
+                    streamer.auto_redeemed_rewards.add(reward_id)
+                if is_max_per_stream_reward is False and reward_id is not None:
+                    cooldown_seconds = int(reward.get("cooldownSeconds") or 60)
+                    next_due = time.time() + cooldown_seconds
+                    streamer.auto_redeem_non_max_next_attempts[reward_id] = next_due
+                    if min_non_max_next_due is None or next_due < min_non_max_next_due:
+                        min_non_max_next_due = next_due
+                continue
+
+            if error_code is not None:
+                error_codes_seen.add(error_code)
+
+            if (
+                is_max_per_stream_reward
+                and error_code in exhausted_codes
+                and streamer.is_online
+                and reward_id
+            ):
+                if reward_id not in streamer.auto_redeem_exhausted_rewards:
+                    streamer.auto_redeem_exhausted_rewards.add(reward_id)
+                    max_per_stream_setting = reward.get("maxPerStreamSetting") or {}
+                    max_per_stream = max_per_stream_setting.get("maxPerStream")
+                    redeemed_current_stream = reward.get("redemptionsRedeemedCurrentStream")
+                    if max_per_stream is not None:
+                        limit_details = f" ({redeemed_current_stream}/{max_per_stream}). "
+                    else:
+                        limit_details = ". "
+                    logger.info(
+                        f"Skip auto redeem for {streamer}: '{reward.get('title')}' reached max-per-stream"
+                        f"{limit_details}Will retry next stream.",
+                        extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
+                    )
+                    pretty_skip_logged = True
+
+            if (
+                is_max_per_stream_reward
+                and streamer.is_online
+                and error_code in unavailable_codes
+            ):
+                max_unavailable_attempts += 1
+
+            if is_max_per_stream_reward is False and reward_id is not None:
+                cooldown_seconds = int(reward.get("cooldownSeconds") or 60)
+                self.__log_auto_redeem_debug(
+                    streamer,
+                    reward,
+                    f"set next non-max retry after failure to {cooldown_seconds}s",
+                )
+                next_due = time.time() + cooldown_seconds
+                streamer.auto_redeem_non_max_next_attempts[reward_id] = next_due
+                if min_non_max_next_due is None or next_due < min_non_max_next_due:
+                    min_non_max_next_due = next_due
+
+        should_stop_online_cycle = (
+            streamer.is_online
+            and has_non_max_targets is False
+            and (
+                max_eligible_targets == 0
+                or (
+                    max_attempted_targets > 0
+                    and max_attempted_targets == max_unavailable_attempts
+                )
+            )
+        )
+        if should_stop_online_cycle:
+            streamer.auto_redeem_next_check_at = 0
+            logger.info(
+                f"[auto-redeem] streamer={streamer.username} stop online cycle "
+                f"attempted={attempted_targets} redeemed={redeemed_targets} "
+                f"errors={sorted(error_codes_seen) if len(error_codes_seen) > 0 else []}"
+            )
+            if online_transition_mode and not pretty_skip_logged:
+                logger.info(
+                    f"[auto-redeem] {streamer.username} online trigger: no redeem "
+                    f"(attempted={attempted_targets}, redeemed={redeemed_targets}, "
+                    f"errors={sorted(error_codes_seen) if len(error_codes_seen) > 0 else []})",
+                    extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
+                )
+            return
+
+        now = time.time()
+        next_check_at = now + poll_interval
+        if has_max_targets is False and min_non_max_next_due is not None:
+            next_check_at = max(now + 0.5, min_non_max_next_due)
+        streamer.auto_redeem_next_check_at = next_check_at
+        logger.debug(
+            f"[auto-redeem][debug] streamer={streamer.username} next_check_at={streamer.auto_redeem_next_check_at} "
+            f"attempted={attempted_targets} redeemed={redeemed_targets} "
+            f"min_non_max_next_due={min_non_max_next_due}"
+        )
+
+        if online_transition_mode:
+            if redeemed_targets > 0:
+                logger.info(
+                    f"[auto-redeem] {streamer.username} online trigger: redeemed={redeemed_targets} "
+                    f"(attempted={attempted_targets})",
+                    extra={"emoji": ":ticket:", "event": Events.REWARD_REDEEMED},
+                )
+            elif attempted_targets > 0:
+                if not pretty_skip_logged:
+                    logger.info(
+                        f"[auto-redeem] {streamer.username} online trigger: failed "
+                        f"(attempted={attempted_targets}, errors={sorted(error_codes_seen)})",
+                        extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
+                    )
+            else:
+                logger.info(
+                    f"[auto-redeem] {streamer.username} online trigger: waiting "
+                    f"(eligible={max_eligible_targets}, points={streamer.channel_points})",
+                    extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
+                )
 
     def __handle_streamer_rewards(self, streamer, channel):
         settings = streamer.settings
+        silent_fast_mode = streamer.username == "saintsakura"
+        poll_interval = 3 if silent_fast_mode else 60
         redeem_titles = settings.auto_redeem_reward_titles
         if isinstance(redeem_titles, str):
             redeem_titles = [redeem_titles]
@@ -807,19 +1300,19 @@ class Twitch(object):
         ):
             return
 
-        # Auto-redeem should only run while streamer is online.
+        # Auto-redeem runs only while streamer is online.
         if streamer.is_online is not True:
             streamer.auto_redeem_next_check_at = 0
             return
 
         # Default to a periodic refresh for auto-redeem streamers.
-        streamer.auto_redeem_next_check_at = time.time() + 60
+        streamer.auto_redeem_next_check_at = time.time() + poll_interval
 
         cps = channel.get("communityPointsSettings", {})
         custom_rewards = cps.get("customRewards", []) if cps else []
         automatic_rewards = cps.get("automaticRewards", []) if cps else []
 
-        if settings.fetch_rewards is True:
+        if settings.fetch_rewards is True and not silent_fast_mode:
             logger.debug(
                 f"Rewards for {streamer}: automatic={len(automatic_rewards)} custom={len(custom_rewards)}"
             )
@@ -828,40 +1321,15 @@ class Twitch(object):
                     f"[CUSTOM] {reward.get('title')} | id={reward.get('id')} | cost={self.__reward_cost(reward)} | inStock={reward.get('isInStock')}"
                 )
 
-        by_id = {
-            reward.get("id"): reward
-            for reward in custom_rewards
-            if reward.get("id") is not None
-        }
-        by_title_exact = {
-            (reward.get("title") or "").strip().lower(): reward
-            for reward in custom_rewards
-        }
+        targets = self.__resolve_auto_redeem_targets(settings, custom_rewards)
 
-        targets = []
-        for reward_id in settings.auto_redeem_reward_ids:
-            reward = by_id.get(reward_id)
-            if reward is not None:
-                targets.append(reward)
-        for reward_title in redeem_titles:
-            normalized_title = (reward_title or "").strip().lower()
-            if normalized_title == "":
-                continue
-
-            # Exact title match first.
-            reward = by_title_exact.get(normalized_title)
-            if reward is not None:
-                targets.append(reward)
-                continue
-
-            # Fallback: partial title match so user can provide only a fragment.
-            for candidate in custom_rewards:
-                candidate_title = (candidate.get("title") or "").strip().lower()
-                if normalized_title in candidate_title:
-                    targets.append(candidate)
-                    break
+        if len(targets) == 0:
+            if silent_fast_mode and streamer.is_online:
+                streamer.auto_redeem_next_check_at = 0
+            return
 
         seen = set()
+        found_in_stock_target = False
         for reward in targets:
             reward_id = reward.get("id")
             if reward_id in seen:
@@ -878,43 +1346,63 @@ class Twitch(object):
                 continue
 
             if reward.get("isInStock") is not True:
+                self.__log_auto_redeem_info(
+                    streamer,
+                    reward,
+                    f"skip: reward not in stock cooldown_expires_at={reward.get('cooldownExpiresAt')}",
+                )
                 if self.__is_reward_exhausted_for_current_stream(reward):
-                    streamer.auto_redeem_exhausted_rewards.add(reward_id)
-                    logger.info(
-                        f"Skip auto redeem for {streamer}: '{reward.get('title')}' reached max-per-stream "
-                        f"({reward.get('redemptionsRedeemedCurrentStream')}/{(reward.get('maxPerStreamSetting') or {}).get('maxPerStream')}). "
-                        "Will retry next stream.",
-                        extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
-                    )
+                    if streamer.is_online is True:
+                        streamer.auto_redeem_exhausted_rewards.add(reward_id)
+                        if not silent_fast_mode:
+                            logger.info(
+                                f"Skip auto redeem for {streamer}: '{reward.get('title')}' reached max-per-stream "
+                                f"({reward.get('redemptionsRedeemedCurrentStream')}/{(reward.get('maxPerStreamSetting') or {}).get('maxPerStream')}). "
+                                "Will retry next stream.",
+                                extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
+                            )
                     continue
 
                 cooldown_ts = self.__parse_twitch_timestamp(reward.get("cooldownExpiresAt"))
                 if cooldown_ts is not None:
                     # Re-check shortly after cooldown end.
                     self.__schedule_auto_redeem_check(streamer, cooldown_ts + 1)
-                logger.info(
-                    f"Skip auto redeem for {streamer}: '{reward.get('title')}' is out of stock "
-                    f"(cooldownExpiresAt={reward.get('cooldownExpiresAt')}, "
-                    f"next_check_at={datetime.fromtimestamp(streamer.auto_redeem_next_check_at, timezone.utc).isoformat() if streamer.auto_redeem_next_check_at else None})",
-                    extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
-                )
+                if not silent_fast_mode:
+                    logger.info(
+                        f"Skip auto redeem for {streamer}: '{reward.get('title')}' is out of stock "
+                        f"(cooldownExpiresAt={reward.get('cooldownExpiresAt')}, "
+                        f"next_check_at={datetime.fromtimestamp(streamer.auto_redeem_next_check_at, timezone.utc).isoformat() if streamer.auto_redeem_next_check_at else None})",
+                        extra={"emoji": ":hourglass_flowing_sand:", "event": Events.REWARD_SKIPPED},
+                    )
                 continue
 
+            found_in_stock_target = True
+            self.__log_auto_redeem_info(streamer, reward, "reward is in stock and eligible for evaluation")
             if streamer.channel_points < int(self.__reward_cost(reward) or 0):
-                self.__schedule_auto_redeem_check(streamer, time.time() + 60)
-                logger.info(
-                    f"Skip auto redeem for {streamer}: not enough points for '{reward.get('title')}'"
+                self.__schedule_auto_redeem_check(
+                    streamer, time.time() + poll_interval
                 )
+                if not silent_fast_mode:
+                    logger.info(
+                        f"Skip auto redeem for {streamer}: not enough points for '{reward.get('title')}'"
+                    )
                 continue
 
-            redeemed = self.__redeem_custom_reward(
+            self.__log_auto_redeem_info(streamer, reward, "attempt redeem")
+            redeemed, _error_code = self.__redeem_custom_reward(
                 streamer, reward, text_input=settings.auto_redeem_text
             )
             if redeemed is True:
                 if settings.auto_redeem_repeat is not True:
                     streamer.auto_redeemed_rewards.add(reward_id)
                 # Refresh soon to observe newly assigned cooldown and continue cycle.
-                self.__schedule_auto_redeem_check(streamer, time.time() + 20)
+                next_attempt_delay = 3 if silent_fast_mode else 20
+                self.__schedule_auto_redeem_check(
+                    streamer, time.time() + next_attempt_delay
+                )
+
+        if silent_fast_mode and streamer.is_online and not found_in_stock_target:
+            streamer.auto_redeem_next_check_at = 0
 
     # Load the amount of current points for a channel, check if a bonus is available
     def load_channel_points_context(self, streamer, include_rewards=True):

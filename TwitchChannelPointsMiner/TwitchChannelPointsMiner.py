@@ -257,7 +257,9 @@ class TwitchChannelPointsMiner:
                     streamers_name.append(username)
                     streamers_dict[username] = streamer
                     explicit_streamers_usernames.add(username)
-                    streamer_context_interval[username] = 12
+                    streamer_context_interval[username] = (
+                        4 if username == "saintsakura" else 12
+                    )
 
             if followers is True:
                 followers_array = self.twitch.get_followers(order=followers_order)
@@ -284,7 +286,7 @@ class TwitchChannelPointsMiner:
                     interval = streamer_context_interval.get(username, 60)
                     startup_delay = (
                         random.uniform(0.05, 0.15)
-                        if interval == 12
+                        if interval <= 12
                         else random.uniform(0.15, 0.35)
                     )
                     time.sleep(startup_delay)
@@ -331,6 +333,10 @@ class TwitchChannelPointsMiner:
             def explicit_streamer_atomic_loop(streamer: Streamer, interval: int):
                 # Run immediately, then continue by per-streamer timer.
                 next_context_due = time.time()
+                fast_silent_redeem_mode = streamer.is_fast_auto_redeem_mode()
+                has_auto_redeem_targets = streamer.has_auto_redeem_targets()
+                if fast_silent_redeem_mode and has_auto_redeem_targets:
+                    self.twitch.prime_auto_redeem_cache(streamer)
                 logger.debug(
                     f"[atomic] start checker for {streamer.username} interval={interval}s"
                 )
@@ -349,28 +355,34 @@ class TwitchChannelPointsMiner:
                                 streamer, include_rewards=False
                             )
                             self.twitch.check_streamer_online(streamer)
+                            if fast_silent_redeem_mode and streamer.has_auto_redeem_targets():
+                                self.twitch.prime_auto_redeem_cache(streamer)
                             next_context_due = time.time() + interval
 
-                        settings = streamer.settings
-                        has_auto_redeem_targets = (
-                            settings is not None
-                            and (
-                                len(settings.auto_redeem_reward_ids or []) > 0
-                                or len(settings.auto_redeem_reward_titles or []) > 0
-                            )
-                        )
+                        has_auto_redeem_targets = streamer.has_auto_redeem_targets()
+                        if (
+                            fast_silent_redeem_mode
+                            and streamer.is_online is True
+                            and has_auto_redeem_targets
+                            and streamer.auto_redeem_next_check_at == 0
+                        ):
+                            streamer.auto_redeem_next_check_at = time.time() + 3
                         if (
                             has_auto_redeem_targets
+                            and (fast_silent_redeem_mode is False or streamer.is_online)
                             and streamer.auto_redeem_next_check_at != 0
                             and time.time() >= streamer.auto_redeem_next_check_at
                         ):
-                            logger.debug(
-                                f"[atomic] tick auto_redeem for {streamer.username} "
-                                f"(online={streamer.is_online})"
-                            )
+                            if not fast_silent_redeem_mode:
+                                logger.debug(
+                                    f"[atomic] tick auto_redeem for {streamer.username} "
+                                    f"(online={streamer.is_online})"
+                                )
                             # Reset before request to avoid tight loops on failures.
                             streamer.auto_redeem_next_check_at = 0
-                            if streamer.is_online:
+                            if fast_silent_redeem_mode:
+                                self.twitch.fast_auto_redeem_tick(streamer, trigger="periodic")
+                            elif streamer.is_online:
                                 self.twitch.load_channel_points_context(streamer)
                             else:
                                 self.twitch.check_streamer_online(streamer)
@@ -413,7 +425,7 @@ class TwitchChannelPointsMiner:
                 interval = streamer_context_interval.get(streamer.username, 60)
                 startup_delay = (
                     random.uniform(0.05, 0.15)
-                    if interval == 12
+                    if interval <= 12
                     else random.uniform(0.15, 0.35)
                 )
                 time.sleep(startup_delay)
