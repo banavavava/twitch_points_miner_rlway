@@ -873,7 +873,7 @@ class Twitch(object):
             )
 
             if (
-                streamer.username == "saintsakura"
+                streamer.is_fast_auto_redeem_mode()
                 and self.__is_reward_max_per_stream_enabled(reward) is False
                 and reward_id not in existing_non_max_next_attempts
             ):
@@ -910,7 +910,7 @@ class Twitch(object):
         return max_per_stream > 0 and redeemed_current_stream >= max_per_stream
 
     def __redeem_custom_reward(self, streamer, reward, text_input=None):
-        silent_fast_mode = streamer.username == "saintsakura"
+        silent_fast_mode = streamer.is_fast_auto_redeem_mode()
         cost = self.__reward_cost(reward)
         if cost is None:
             if not silent_fast_mode:
@@ -1304,7 +1304,7 @@ class Twitch(object):
 
     def __handle_streamer_rewards(self, streamer, channel):
         settings = streamer.settings
-        silent_fast_mode = streamer.username == "saintsakura"
+        silent_fast_mode = streamer.is_fast_auto_redeem_mode()
         poll_interval = 3 if silent_fast_mode else 60
         redeem_titles = settings.auto_redeem_reward_titles
         if isinstance(redeem_titles, str):

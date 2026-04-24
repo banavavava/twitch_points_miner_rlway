@@ -15,6 +15,8 @@ from TwitchChannelPointsMiner.utils import _millify
 
 logger = logging.getLogger(__name__)
 
+FAST_AUTO_REDEEM_WINDOW_SECONDS = 5 * 60
+
 
 class StreamerSettings(object):
     __slots__ = [
@@ -181,7 +183,13 @@ class Streamer(object):
         )
 
     def is_fast_auto_redeem_mode(self) -> bool:
-        return self.username == "saintsakura"
+        # Keep fast mode always while offline so "first" rewards can be retried
+        # continuously before live-status detection catches up.
+        if self.is_online is not True:
+            return True
+        if self.online_at == 0:
+            return False
+        return (time.time() - self.online_at) < FAST_AUTO_REDEEM_WINDOW_SECONDS
 
     def has_auto_redeem_targets(self) -> bool:
         return self.settings is not None and self.settings.has_auto_redeem_targets()

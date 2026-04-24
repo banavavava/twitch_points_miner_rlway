@@ -333,9 +333,8 @@ class TwitchChannelPointsMiner:
             def explicit_streamer_atomic_loop(streamer: Streamer, interval: int):
                 # Run immediately, then continue by per-streamer timer.
                 next_context_due = time.time()
-                fast_silent_redeem_mode = streamer.is_fast_auto_redeem_mode()
                 has_auto_redeem_targets = streamer.has_auto_redeem_targets()
-                if fast_silent_redeem_mode and has_auto_redeem_targets:
+                if streamer.is_fast_auto_redeem_mode() and has_auto_redeem_targets:
                     self.twitch.prime_auto_redeem_cache(streamer)
                 logger.debug(
                     f"[atomic] start checker for {streamer.username} interval={interval}s"
@@ -343,6 +342,7 @@ class TwitchChannelPointsMiner:
                 while self.running and self.twitch.running:
                     try:
                         now = time.time()
+                        fast_silent_redeem_mode = streamer.is_fast_auto_redeem_mode()
 
                         if now >= next_context_due:
                             logger.debug(
