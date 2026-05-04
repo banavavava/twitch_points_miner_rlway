@@ -1048,7 +1048,7 @@ class Twitch(object):
                 if self.__is_reward_max_per_stream_enabled(reward) is True
             ]
 
-        poll_interval = 3
+        poll_interval = 1
         if len(cached_rewards) == 0:
             streamer.auto_redeem_next_check_at = 0
             if online_transition_mode:
